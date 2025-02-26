@@ -18,3 +18,11 @@ primary_region = 'otp'
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+[build]
+  dockerfile = "Dockerfile"
+  
