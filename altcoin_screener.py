@@ -3,10 +3,12 @@ import ccxt
 import pandas as pd
 import logging
 import asyncio
+import threading
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
 from dotenv import load_dotenv
+from flask import Flask
 
 # === Set up logging ===
 logging.basicConfig(level=logging.INFO)
@@ -22,11 +24,23 @@ load_dotenv()
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+PORT = int(os.getenv("PORT", 8080))  # Default port for Cloud Run
 
-if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_SECRET_KEY") or not os.getenv("TELEGRAM_BOT_TOKEN"):
+if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN:
     raise ValueError("❌ ERROR: Missing API keys or bot token! Check your environment variables.")
 else:
-    print("✅ Environment variables loaded successfully!")
+    print(f"✅ Environment variables loaded successfully! Server will run on port {PORT}")
+
+# === Initialize Flask Web Server ===
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Altcoin Screener Bot is running!"
+
+# Start Flask in a separate thread
+def run_server():
+    app.run(host="0.0.0.0", port=PORT)
 
 # === Initialize Telegram Bot ===
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -74,17 +88,12 @@ TIMEFRAMES = {
 # === Store chat settings ===
 chat_settings = {}  # {chat_id: {"timeframe": "5m"}}
 
-PORT = int(os.getenv("PORT", "8080"))  # use 8080 by default
-
-if __name__ == "__main__":
-    print(f"✅ Server is running on port {PORT}")
-
 # === Command: /start - Register chat ID ===
 @dp.message(Command("start"))
 async def start_command(message: Message):
     chat_id = message.chat.id
     chat_settings[chat_id] = {"timeframe": "5m"}  # Default timeframe
-    await message.answer("👋 Binance Futures Bot is running! Use /set_timeframe to configure.")
+    await message.answer("👋 Altcoin Screener Bot is running! Use /set_timeframe to configure.")
 
 # === Command: /set_timeframe <timeframe> ===
 @dp.message(Command("set_timeframe"))
@@ -163,10 +172,7 @@ async def process_market_data(data):
         )
         await bot.send_message(chat_id=data["chat_id"], text=message)
 
-# === Start the bot ===
-async def main():
-    asyncio.create_task(monitor_market())
-    await dp.start_polling(bot)
-
+# === Start the bot and Flask server ===
 if __name__ == "__main__":
-    asyncio.run(main())
+    threading.Thread(target=run_server).start()  # Start Flask server
+    asyncio.run(main())  # Start Telegram bot

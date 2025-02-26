@@ -1,14 +1,13 @@
-# Use Python 3.10 as base image
-FROM python:3.10
+FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY . .    
-
+COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
-ENV BINANCE_API_KEY=${BINANCE_API_KEY}
-ENV BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
-ENV TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
 
+# Expose the default Cloud Run port
+ENV PORT=8080
 EXPOSE 8080
-CMD ["python", "alt-anomalies.py"]
+
+# Run the bot script
+CMD ["python", "altcoin_screener.py"]

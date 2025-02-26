@@ -29,11 +29,13 @@ gcloud builds submit --tag gcr.io/$(gcloud config get-value project)/alt-anomali
 
 gcloud run deploy alt-anomalies \
   --image gcr.io/$(gcloud config get-value project)/alt-anomalies \
-  --region us-central1 \
+  --region europe-west1 \
   --platform managed \
   --allow-unauthenticated \
-  --env-vars-file env.yaml \
-  --timeout=300s
+  --set-env-vars "BINANCE_API_KEY=LuYr36BAvOZ3UxGlO00wWGpE1gwFvhjd1zMqEMXvfXy4qOkOtIh20jjDLDolVe7E" \
+  --set-env-vars "BINANCE_SECRET_KEY=XIgYJx1fz5RWRH6JvTcQeQzMP4RmfMaVU78GeZDFvzsEuAxZMzZ7KV8FpDCmM0vT" \
+  --set-env-vars "TELEGRAM_BOT_TOKEN=7279536567:AAEBxZUuAvPmGSU2soqhXXFOr7WU7kVmG5I" \
+  --timeout=900s
 
 gcloud run services describe alt-anomalies --region us-central1
 gcloud run services list

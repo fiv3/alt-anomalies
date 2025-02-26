@@ -3,3 +3,4 @@ pandas
 aiogram
 python-dotenv
 asyncio
+flask
