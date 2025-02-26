@@ -18,17 +18,10 @@ primary_region = "otp"
   cpu_kind = "shared"
   cpus = 1
 
-[processes]
-  app = "python alt-anomalies.py"
-
-[mounts]
-  source = "data"
-  destination = "/app/data"
-
 [checks]
-  [checks.http]
+  [checks.tcp]  # Исправленный тип проверки (был ошибочный "http")
     grace_period = "10s"
     interval = "30s"
-    method = "GET"
     timeout = "5s"
-    path = "/"
+    restart_limit = 3
+    internal_port = 8080

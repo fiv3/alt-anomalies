@@ -1,7 +1,7 @@
 # Use an official lightweight Python image
 FROM python:3.10-slim
 
-# Set the working directory in the container
+# Set the working directory
 WORKDIR /app
 
 # Copy only necessary files first for efficient caching
@@ -16,5 +16,5 @@ COPY . .
 # Expose port for Fly.io health checks
 EXPOSE 8080
 
-# Start the bot
+# Run the bot
 CMD ["python", "alt-anomalies.py"]
