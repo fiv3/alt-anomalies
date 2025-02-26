@@ -23,10 +23,6 @@ BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-print("BINANCE_API_KEY:", os.getenv("BINANCE_API_KEY"))
-print("BINANCE_SECRET_KEY:", os.getenv("BINANCE_SECRET_KEY"))
-print("TELEGRAM_BOT_TOKEN:", os.getenv("TELEGRAM_BOT_TOKEN"))
-
 if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_SECRET_KEY") or not os.getenv("TELEGRAM_BOT_TOKEN"):
     raise ValueError("❌ ERROR: Missing API keys or bot token! Check your environment variables.")
 else:
@@ -77,6 +73,11 @@ TIMEFRAMES = {
 
 # === Store chat settings ===
 chat_settings = {}  # {chat_id: {"timeframe": "5m"}}
+
+PORT = int(os.getenv("PORT", "8080"))  # use 8080 by default
+
+if __name__ == "__main__":
+    print(f"✅ Server is running on port {PORT}")
 
 # === Command: /start - Register chat ID ===
 @dp.message(Command("start"))
