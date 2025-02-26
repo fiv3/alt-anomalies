@@ -23,9 +23,6 @@ BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-printenv | grep BINANCE
-printenv | grep TELEGRAM
-
 print("BINANCE_API_KEY:", os.getenv("BINANCE_API_KEY"))
 print("BINANCE_SECRET_KEY:", os.getenv("BINANCE_SECRET_KEY"))
 print("TELEGRAM_BOT_TOKEN:", os.getenv("TELEGRAM_BOT_TOKEN"))
