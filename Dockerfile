@@ -10,13 +10,14 @@ COPY . .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port (if needed)
-EXPOSE 8080
+# Explicitly set environment variables (THIS IS THE FIX)
+ARG BINANCE_API_KEY
+ARG BINANCE_SECRET_KEY
+ARG TELEGRAM_BOT_TOKEN
 
-# Ensure environment variables are passed correctly
-ENV BINANCE_API_KEY=${BINANCE_API_KEY}
-ENV BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
-ENV TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+ENV BINANCE_API_KEY=$BINANCE_API_KEY
+ENV BINANCE_SECRET_KEY=$BINANCE_SECRET_KEY
+ENV TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 
 # Run the application
 CMD ["python", "alt-anomalies.py"]
