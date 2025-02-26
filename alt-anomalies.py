@@ -26,7 +26,10 @@ BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN:
-    raise ValueError("❌ ERROR: Missing API keys or bot token! Check your .env file.")
+    raise ValueError("❌ ERROR: Missing API keys or bot token! Check your environment variables.")
+else:
+    print("✅ Environment variables loaded successfully!")
+
 
 # === Initialize Telegram Bot ===
 bot = Bot(token=TELEGRAM_BOT_TOKEN)

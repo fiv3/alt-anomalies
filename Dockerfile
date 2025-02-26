@@ -1,20 +1,21 @@
-# Use an official lightweight Python image
-FROM python:3.10-slim
+# Use official Python image
+FROM python:3.10
 
-# Set the working directory
+# Set working directory inside the container
 WORKDIR /app
 
-# Copy only necessary files first for efficient caching
-COPY requirements.txt .
+# Copy project files into the container
+COPY . .
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
-COPY . .
-
-# Expose port for Fly.io health checks
 EXPOSE 8080
+
+# Pass environment variables explicitly
+ENV BINANCE_API_KEY=$BINANCE_API_KEY
+ENV BINANCE_SECRET_KEY=$BINANCE_SECRET_KEY
+ENV TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 
 # Run the bot
 CMD ["python", "alt-anomalies.py"]
