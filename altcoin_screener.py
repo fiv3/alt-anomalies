@@ -39,8 +39,13 @@ def home():
     return "Altcoin Screener Bot is running!"
 
 # Start Flask in a separate thread
+# Run Flask in a separate thread
 def run_server():
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=8080)  # Ensure it listens on 8080
+
+if __name__ == "__main__":
+    threading.Thread(target=run_server, daemon=True).start()  # Start Flask server
+    asyncio.run(main())  # Run Telegram bot
 
 # === Initialize Telegram Bot ===
 bot = Bot(token=TELEGRAM_BOT_TOKEN)

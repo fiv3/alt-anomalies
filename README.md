@@ -27,9 +27,9 @@ gcloud projects add-iam-policy-binding altcoin-screener \
 
 gcloud builds submit --tag gcr.io/$(gcloud config get-value project)/alt-anomalies .
 
-gcloud run deploy alt-anomalies \
-  --image gcr.io/$(gcloud config get-value project)/alt-anomalies \
-  --region europe-west1 \
+gcloud run deploy altcoin-screener \
+  --image gcr.io/$(gcloud config get-value project)/altcoin-screener \
+  --region asia-east1 \
   --platform managed \
   --allow-unauthenticated \
   --set-env-vars "BINANCE_API_KEY=LuYr36BAvOZ3UxGlO00wWGpE1gwFvhjd1zMqEMXvfXy4qOkOtIh20jjDLDolVe7E" \
@@ -49,3 +49,5 @@ gcloud run services list
 
 ### 🚀 Your Alt-Anomalies cryptanalytics tool is now running on Google Cloud Run!
 
+gcloud builds submit --tag gcr.io/$(gcloud config get-value project)/altcoin-screener .
+gcloud run deploy altcoin-screener --image gcr.io/$(gcloud config get-value project)/altcoin-screener --region us-central1 --platform managed --allow-unauthenticated --set-env-vars "BINANCE_API_KEY=your_key" --set-env-vars "BINANCE_SECRET_KEY=your_key" --set-env-vars "TELEGRAM_BOT_TOKEN=your_key" --timeout=300s
