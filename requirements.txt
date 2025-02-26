@@ -2,3 +2,4 @@ ccxt
 pandas
 aiogram
 python-dotenv
+asyncio

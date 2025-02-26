@@ -1,17 +1,20 @@
-# Use official Python image
-FROM python:3.10
+# Use an official lightweight Python image
+FROM python:3.10-slim
 
-# Set the working directory
+# Set the working directory in the container
 WORKDIR /app
 
-# Copy the project files
-COPY . .
+# Copy only necessary files first for efficient caching
+COPY requirements.txt .
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose the port (not always needed for Telegram bots)
+# Copy the rest of the application
+COPY . .
+
+# Expose port for Fly.io health checks
 EXPOSE 8080
 
-# Command to run the bot
+# Start the bot
 CMD ["python", "alt-anomalies.py"]
