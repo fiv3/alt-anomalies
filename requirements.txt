@@ -1,6 +1,6 @@
+aiogram>=3.0.0
+flask
 ccxt
 pandas
-aiogram
 python-dotenv
-asyncio
-flask
+aiohttp

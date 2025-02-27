@@ -5,29 +5,27 @@ import logging
 import asyncio
 import threading
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message
+from aiogram.types import Message, Update
 from aiogram.filters import Command
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from dotenv import load_dotenv
-from flask import Flask
+from flask import Flask, request
+from aiohttp import web
 
 # === Set up logging ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# === Fix Windows Async Event Loop ===
-import sys
-if sys.platform.startswith("win"):
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # === Load environment variables ===
 load_dotenv()
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+SERVICE_URL = os.getenv("SERVICE_URL")  # Cloud Run URL
 PORT = int(os.getenv("PORT", 8080))  # Default port for Cloud Run
 
-if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN:
-    raise ValueError("❌ ERROR: Missing API keys or bot token! Check your environment variables.")
+if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN or not SERVICE_URL:
+    raise ValueError("❌ ERROR: Missing API keys, bot token, or service URL! Check your environment variables.")
 else:
     print(f"✅ Environment variables loaded successfully! Server will run on port {PORT}")
 
@@ -38,20 +36,24 @@ app = Flask(__name__)
 def home():
     return "Altcoin Screener Bot is running!"
 
-# Start Flask in a separate thread
-# Run Flask in a separate thread
-def run_server():
-    app.run(host="0.0.0.0", port=8080)  # Ensure it listens on 8080
+# === Set up Telegram Webhook ===
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{SERVICE_URL}{WEBHOOK_PATH}"  # Ensure this matches Cloud Run URL
 
-if __name__ == "__main__":
-    threading.Thread(target=run_server, daemon=True).start()  # Start Flask server
-    asyncio.run(main())  # Run Telegram bot
-
-# === Initialize Telegram Bot ===
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
-# === Connect to Binance API ===
+# === Flask Webhook Route ===
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook():
+    update = Update(**await request.json)
+    return await dp.feed_webhook_update(bot, update)
+
+async def set_webhook():
+    """Set Telegram webhook."""
+    await bot.set_webhook(WEBHOOK_URL)
+
+# === Initialize Binance API ===
 binance = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'secret': BINANCE_SECRET_KEY,
@@ -119,7 +121,6 @@ async def fetch_market_data(symbol, timeframe, chat_id):
         latest = df.iloc[-1]
         previous = df.iloc[-2]
 
-        # Fetch Open Interest (OI)
         oi_data = binance.fapiPublicGetOpenInterest({'symbol': symbol})
         open_interest = float(oi_data['openInterest'])
 
@@ -166,7 +167,6 @@ async def process_market_data(data):
     oi_direction = "🟢🔺" if oi_change > 0 else "🔴🔻"
     price_direction = "🟢🔼" if price_change > 0 else "🔴🔽"
 
-    # Apply timeframe-specific volume threshold
     if abs(price_change) > 2 and volume_change > volume_threshold and abs(volatility_change) > 50 and abs(oi_change) > 50:
         message = (
             f"📢 {data['symbol']} ({data['timeframe']})\n"
@@ -177,7 +177,12 @@ async def process_market_data(data):
         )
         await bot.send_message(chat_id=data["chat_id"], text=message)
 
-# === Start the bot and Flask server ===
+async def main():
+    await set_webhook()
+    asyncio.create_task(monitor_market())
+    web.run_app(setup_application(app), host="0.0.0.0", port=PORT)
+
+# === Start the Webhook and Flask Server ===
 if __name__ == "__main__":
-    threading.Thread(target=run_server).start()  # Start Flask server
-    asyncio.run(main())  # Start Telegram bot
+    threading.Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': PORT}, daemon=True).start()
+    asyncio.run(main()) 

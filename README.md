@@ -1,7 +1,7 @@
 ## Cryptanalytics for Predicting Alternative Anomalies
 ### Hosted in Google Cloud Platform (GCP)
 
-This guide provides step-by-step instructions to deploy **Alt-Anomalies** on **Google Cloud Run**.
+This guide provides step-by-step instructions to deploy **altcoin-screener** on **Google Cloud Run**.
 
 ### **1️⃣ Enable Required GCP Services**
 
@@ -25,19 +25,10 @@ gcloud projects add-iam-policy-binding altcoin-screener \
     --member=user:varimathrasfiv3@gmail.com \
     --role=roles/owner
 
-gcloud builds submit --tag gcr.io/$(gcloud config get-value project)/alt-anomalies .
+gcloud builds submit --tag gcr.io/$(gcloud config get-value project)/altcoin-screener .
 
-gcloud run deploy altcoin-screener \
-  --image gcr.io/$(gcloud config get-value project)/altcoin-screener \
-  --region asia-east1 \
-  --platform managed \
-  --allow-unauthenticated \
-  --set-env-vars "BINANCE_API_KEY=LuYr36BAvOZ3UxGlO00wWGpE1gwFvhjd1zMqEMXvfXy4qOkOtIh20jjDLDolVe7E" \
-  --set-env-vars "BINANCE_SECRET_KEY=XIgYJx1fz5RWRH6JvTcQeQzMP4RmfMaVU78GeZDFvzsEuAxZMzZ7KV8FpDCmM0vT" \
-  --set-env-vars "TELEGRAM_BOT_TOKEN=7279536567:AAEBxZUuAvPmGSU2soqhXXFOr7WU7kVmG5I" \
-  --timeout=900s
 
-gcloud run services describe alt-anomalies --region us-central1
+gcloud run services describe altcoin-screener --region us-central1
 gcloud run services list
 ```
 
@@ -47,7 +38,7 @@ gcloud run services list
 
 ### Logs can be accessed via Cloud Run Logs: gcloud logs read --limit 50.
 
-### 🚀 Your Alt-Anomalies cryptanalytics tool is now running on Google Cloud Run!
+### 🚀 Your altcoin-screener cryptanalytics tool is now running on Google Cloud Run!
 
 gcloud builds submit --tag gcr.io/$(gcloud config get-value project)/altcoin-screener .
 gcloud run deploy altcoin-screener --image gcr.io/$(gcloud config get-value project)/altcoin-screener --region us-central1 --platform managed --allow-unauthenticated --set-env-vars "BINANCE_API_KEY=your_key" --set-env-vars "BINANCE_SECRET_KEY=your_key" --set-env-vars "TELEGRAM_BOT_TOKEN=your_key" --timeout=300s
