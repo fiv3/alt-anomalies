@@ -1,6 +1,6 @@
-aiogram>=3.0.0
 flask
+aiogram==3.0.0b7
 ccxt
 pandas
 python-dotenv
-aiohttp
+gunicorn

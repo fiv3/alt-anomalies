@@ -31,6 +31,9 @@ else:
 
 # === Initialize Flask Web Server ===
 app = Flask(__name__)
+app = web.Application()
+webhook_requests = SimpleRequestHandler(dispatcher=dp, bot=bot)
+webhook_requests.register(app, path=WEBHOOK_PATH)
 
 @app.route("/")
 def home():
@@ -181,6 +184,10 @@ async def main():
     await set_webhook()
     asyncio.create_task(monitor_market())
     web.run_app(setup_application(app), host="0.0.0.0", port=PORT)
+
+async def main():
+    await bot.set_webhook(WEBHOOK_URL)
+    web.run_app(app, host="0.0.0.0", port=PORT)
 
 # === Start the Webhook and Flask Server ===
 if __name__ == "__main__":
