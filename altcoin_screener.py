@@ -4,13 +4,33 @@ import logging
 import asyncio
 import pandas as pd
 from aiogram import Bot, Dispatcher
-from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from dotenv import load_dotenv
 from aiohttp import web
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram import BaseMiddleware
+
+class ThrottlingMiddleware(BaseMiddleware):
+    def __init__(self, limit=1):
+        super().__init__()
+        self.rate_limit = limit
+        self.users = {}
+
+    async def __call__(self, handler, event, data):
+        user_id = event.from_user.id if event.from_user else None
+        if not user_id:
+            return await handler(event, data)
+
+        if user_id in self.users:
+            await asyncio.sleep(self.rate_limit)
+        
+        self.users[user_id] = True
+        await asyncio.sleep(self.rate_limit)
+        del self.users[user_id]
+
+        return await handler(event, data)
 
 # === Set up logging ===
 logging.basicConfig(level=logging.INFO)
@@ -43,23 +63,6 @@ async def home(request):
     return web.Response(text="Altcoin Screener Bot is running!")
 
 app.router.add_get("/", home)
-
-class ThrottlingMiddleware(BaseMiddleware):
-    def __init__(self, limit=1):
-        super().__init__()
-        self.rate_limit = limit
-        self.users = {}
-
-    async def __call__(self, handler, event, data):
-        user_id = event.from_user.id
-        if user_id in self.users:
-            await asyncio.sleep(self.rate_limit)
-        
-        self.users[user_id] = True
-        await asyncio.sleep(self.rate_limit)
-        del self.users[user_id]
-        
-        return await handler(event, data)
 
 dp.middleware.setup(ThrottlingMiddleware(limit=1))
 # === Initialize Binance API ===
@@ -287,18 +290,15 @@ async def on_startup():
         logger.error(f"❌ Binance connection test failed: {e}")
 
 async def main():
-    await on_startup()
-    
+    await on_startup()    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    
     logger.info(f"✅ Web server started on port {PORT}")
     
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    web.run_app(app, host="0.0.0.0", port=PORT)
