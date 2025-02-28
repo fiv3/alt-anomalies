@@ -33,17 +33,6 @@ gcloud run deploy altcoin-screener \
     --region asia-east1 \
     --allow-unauthenticated
 
-gcloud run deploy altcoin-screener \
-  --image gcr.io/$(gcloud config get-value project)/altcoin-screener \
-  --region asia-east1 \
-  --platform managed \
-  --allow-unauthenticated \
-  --set-env-vars "BINANCE_API_KEY=LuYr36BAvOZ3UxGlO00wWGpE1gwFvhjd1zMqEMXvfXy4qOkOtIh20jjDLDolVe7E" \
-  --set-env-vars "BINANCE_SECRET_KEY=XIgYJx1fz5RWRH6JvTcQeQzMP4RmfMaVU78GeZDFvzsEuAxZMzZ7KV8FpDCmM0vT" \
-  --set-env-vars "TELEGRAM_BOT_TOKEN=7279536567:AAEBxZUuAvPmGSU2soqhXXFOr7WU7kVmG5I" \
-  --set-env-vars "SERVICE_URL=https://altcoin-screener-256702831943.asia-east1.run.app" \
-  --set-env-vars "PORT=8080" \
-  --timeout=900s
 
 gcloud run services update altcoin-screener-bot \
   --set-env-vars="SERVICE_URL=https://altcoin-screener-256702831943.asia-east1.run.app/"
