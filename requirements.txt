@@ -1,6 +1,5 @@
-flask
-aiogram==3.0.0b7
-ccxt
-pandas
-python-dotenv
-gunicorn
+aiogram>=3.0.0
+aiohttp>=3.8.5
+ccxt>=4.0.0
+pandas>=2.0.0
+python-dotenv>=1.0.0
