@@ -25,15 +25,9 @@ gcloud projects add-iam-policy-binding altcoin-screener \
     --member=user:varimathrasfiv3@gmail.com \
     --role=roles/owner
 
-gcloud builds submit --tag gcr.io/$(gcloud config get-value project)/altcoin-screener .
-
-gcloud run deploy altcoin-screener \
-    --image gcr.io/altcoin-screener/altcoin-screener \
-    --platform managed \
-    --region asia-east1 \
-    --allow-unauthenticated
 
 
+gcloud run services delete altcoin-screener --region asia-east1
 
 gcloud run services describe altcoin-screener --region us-central1
 gcloud run services list

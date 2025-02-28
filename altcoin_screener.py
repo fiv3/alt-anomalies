@@ -50,17 +50,16 @@ class ThrottlingMiddleware(BaseMiddleware):
         self.rate_limit = limit
         self.users = {}
 
-    async def on_pre_process_update(self, update, data):
-        user_id = update.message.chat.id if update.message else None
-        if not user_id:
-            return
-
+    async def __call__(self, handler, event, data):
+        user_id = event.from_user.id
         if user_id in self.users:
             await asyncio.sleep(self.rate_limit)
         
         self.users[user_id] = True
         await asyncio.sleep(self.rate_limit)
         del self.users[user_id]
+        
+        return await handler(event, data)
 
 dp.middleware.setup(ThrottlingMiddleware(limit=1))
 # === Initialize Binance API ===
@@ -289,16 +288,17 @@ async def on_startup():
 
 async def main():
     await on_startup()
-    # Don't start monitoring here, it will be started by the /start command
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
+    
     logger.info(f"✅ Web server started on port {PORT}")
     
-    # Endless task to keep the event loop running
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
