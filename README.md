@@ -34,11 +34,6 @@ gcloud run deploy altcoin-screener \
     --allow-unauthenticated
 
 
-gcloud run services update altcoin-screener-bot \
-  --set-env-vars="SERVICE_URL=https://altcoin-screener-256702831943.asia-east1.run.app/"
-
-curl "https://api.telegram.org/bot7279536567:AAEBxZUuAvPmGSU2soqhXXFOr7WU7kVmG5I/setWebhook?url=YOUR_SERVICE_URL/webhook"
-
 
 gcloud run services describe altcoin-screener --region us-central1
 gcloud run services list
