@@ -9,4 +9,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["python", "altcoin_screener.py"]
+CMD exec python altcoin_screener.py

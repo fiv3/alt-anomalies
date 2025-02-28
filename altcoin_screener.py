@@ -4,6 +4,7 @@ import logging
 import asyncio
 import pandas as pd
 from aiogram import Bot, Dispatcher
+from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
@@ -30,7 +31,7 @@ if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN or no
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{SERVICE_URL}{WEBHOOK_PATH}"
 
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+bot = Bot(token=TELEGRAM_BOT_TOKEN, timeout=30)
 dp = Dispatcher(storage=MemoryStorage())
 
 # === Aiohttp Webhook Setup ===
@@ -38,11 +39,30 @@ app = web.Application()
 webhook_requests = SimpleRequestHandler(dispatcher=dp, bot=bot)
 webhook_requests.register(app, path=WEBHOOK_PATH)
 
-async def home(request):
+async def home(request): 
     return web.Response(text="Altcoin Screener Bot is running!")
 
 app.router.add_get("/", home)
 
+class ThrottlingMiddleware(BaseMiddleware):
+    def __init__(self, limit=1):
+        super().__init__()
+        self.rate_limit = limit
+        self.users = {}
+
+    async def on_pre_process_update(self, update, data):
+        user_id = update.message.chat.id if update.message else None
+        if not user_id:
+            return
+
+        if user_id in self.users:
+            await asyncio.sleep(self.rate_limit)
+        
+        self.users[user_id] = True
+        await asyncio.sleep(self.rate_limit)
+        del self.users[user_id]
+
+dp.middleware.setup(ThrottlingMiddleware(limit=1))
 # === Initialize Binance API ===
 binance = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
