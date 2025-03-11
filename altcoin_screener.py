@@ -45,7 +45,7 @@ SERVICE_URL = os.getenv("SERVICE_URL")
 PORT = int(os.getenv("PORT", 8080))
 
 if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN or not SERVICE_URL:
-    raise ValueError("❌ ERROR: Missing API keys, bot token, or service URL!")
+    logger.warning("⚠️ Missing API keys, bot token, or service URL! Bot will run but may not function properly.")
 
 # === Set up Telegram Webhook ===
 WEBHOOK_PATH = "/webhook"
@@ -65,18 +65,25 @@ async def home(request):
 app.router.add_get("/", home)
 
 dp.middleware.setup(ThrottlingMiddleware(limit=1))
-# === Initialize Binance API ===
-binance = ccxt.binance({
-    'apiKey': BINANCE_API_KEY,
-    'secret': BINANCE_SECRET_KEY,
-    'options': {'defaultType': 'future'}
-})
 
-binance.load_markets()
+# === Initialize Binance API ===
+try:
+    binance = ccxt.binance({
+        'apiKey': BINANCE_API_KEY,
+        'secret': BINANCE_SECRET_KEY,
+        'options': {'defaultType': 'future'}
+    })
+    binance.load_markets()
+except Exception as e:
+    logger.error(f"❌ Failed to initialize Binance API: {e}")
+    binance = None
 
 # === Fetch active Binance Futures trading pairs ===
 def get_futures_symbols():
     try:
+        if not binance:
+            return []
+            
         futures_symbols = [
             market.replace("/", "").split(":")[0]
             for market in binance.markets.keys()
@@ -91,16 +98,16 @@ def get_futures_symbols():
 SYMBOLS = get_futures_symbols()
 if not SYMBOLS:
     logger.warning("⚠️ No active Binance Futures symbols found.")
-    SYMBOLS = []
+    SYMBOLS = ["BTCUSDT", "ETHUSDT"]  # Default symbols to avoid empty list
 
 # === Define timeframes and volume thresholds ===
 TIMEFRAMES = {
-    '5m': {'minutes': 5, 'volume_threshold': 500},  # x20
-    '15m': {'minutes': 15, 'volume_threshold': 500},  # x20
-    '1h': {'minutes': 60, 'volume_threshold': 100},  # x4
-    '4h': {'minutes': 240, 'volume_threshold': 100},  # x4
-    '1d': {'minutes': 1440, 'volume_threshold': 25},  # оставить как есть
-    '1w': {'minutes': 10080, 'volume_threshold': 25}  # оставить как есть
+    '5m': {'minutes': 5, 'volume_threshold': 500},
+    '15m': {'minutes': 15, 'volume_threshold': 500},
+    '1h': {'minutes': 60, 'volume_threshold': 100},
+    '4h': {'minutes': 240, 'volume_threshold': 100},
+    '1d': {'minutes': 1440, 'volume_threshold': 25},
+    '1w': {'minutes': 10080, 'volume_threshold': 25}
 }
 
 # === Store chat settings ===
@@ -158,7 +165,7 @@ async def help_command(message: Message):
         "- Volatility change > 50%\n"
         "- Open Interest change > 50%"
     )
-    await message.answer(help_text)
+    await message.answer(help_text, parse_mode="Markdown")
 
 @dp.message(Command("status"))
 async def status_command(message: Message):
@@ -178,13 +185,16 @@ async def status_command(message: Message):
         f"Monitoring symbols: {symbols_count}\n"
         f"Volume threshold: {TIMEFRAMES.get(tf, {}).get('volume_threshold', 'N/A')}%"
     )
-    await message.answer(status_text)
+    await message.answer(status_text, parse_mode="Markdown")
 
 # === Fetch market data ===
 async def fetch_market_data(symbol, timeframe, semaphore):
     async with semaphore:
         try:
-            ohlcv = binance.fetch_ohlcv(symbol, timeframe, limit=2)
+            if not binance:
+                return None
+                
+            ohlcv = binance.fetch_ohlcv(f"{symbol}/USDT:USDT", timeframe, limit=2)
             if not ohlcv or len(ohlcv) < 2:
                 return None
 
@@ -193,7 +203,7 @@ async def fetch_market_data(symbol, timeframe, semaphore):
             previous = df.iloc[-2]
 
             try:
-                oi_data = binance.fetch_open_interest(symbol)
+                oi_data = binance.fetch_open_interest(f"{symbol}/USDT:USDT")
                 open_interest = float(oi_data.get("openInterest", 0)) if oi_data else 0
                 
                 # Get previous OI (simplified approach - in real scenario, store this in a database)
@@ -222,83 +232,102 @@ async def fetch_market_data(symbol, timeframe, semaphore):
 async def monitor_market():
     semaphore = asyncio.Semaphore(10)
     while True:
-        if not chat_settings:
+        try:
+            if not chat_settings:
+                await asyncio.sleep(30)
+                continue
+
+            for chat_id, settings in chat_settings.items():
+                timeframe = settings.get("timeframe", "5m")
+                
+                tasks = [fetch_market_data(symbol, timeframe, semaphore) for symbol in SYMBOLS]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                valid_results = []
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Error fetching data: {result}")
+                    elif result is not None:
+                        valid_results.append(result)
+                
+                for data in valid_results:
+                    await process_market_data(data, chat_id)
+
             await asyncio.sleep(30)
-            continue
-
-        for chat_id, settings in chat_settings.items():
-            timeframe = settings.get("timeframe", "5m")
-            
-            tasks = [fetch_market_data(symbol, timeframe, semaphore) for symbol in SYMBOLS]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            valid_results = []
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.error(f"Error fetching data: {result}")
-                elif result is not None:
-                    valid_results.append(result)
-            
-            for data in valid_results:
-                await process_market_data(data, chat_id)
-
-        await asyncio.sleep(30)
+        except Exception as e:
+            logger.error(f"Error in monitor_market: {e}")
+            await asyncio.sleep(60)  # Wait a bit longer if we hit an error
 
 # === Process and send alerts ===
 async def process_market_data(data, chat_id):
-    timeframe = data['timeframe']
-    volume_threshold = TIMEFRAMES[timeframe]['volume_threshold']
+    try:
+        timeframe = data['timeframe']
+        volume_threshold = TIMEFRAMES[timeframe]['volume_threshold']
 
-    price_change = (data['price'] - data['prev_price']) / data['prev_price'] * 100
-    volume_change = max((data['volume'] - data['prev_volume']) / data['prev_volume'] * 100, 0)
-    volatility_change = (data['volatility'] - data['prev_volatility']) / max(data['prev_volatility'], 1) * 100
-    
-    # Calculate OI change
-    if 'prev_open_interest' in data and data['prev_open_interest'] > 0:
-        oi_change = (data['open_interest'] - data['prev_open_interest']) / data['prev_open_interest'] * 100
-    else:
+        price_change = (data['price'] - data['prev_price']) / data['prev_price'] * 100
+        volume_change = 0
+        if data['prev_volume'] > 0:
+            volume_change = max((data['volume'] - data['prev_volume']) / data['prev_volume'] * 100, 0)
+        
+        volatility_change = 0
+        if data['prev_volatility'] > 0:
+            volatility_change = (data['volatility'] - data['prev_volatility']) / max(data['prev_volatility'], 1) * 100
+        
+        # Calculate OI change
         oi_change = 0
-    
-    # Get price and OI direction
-    price_direction = "📈" if price_change > 0 else "📉"
-    oi_direction = "📈" if oi_change > 0 else "📉"
+        if 'prev_open_interest' in data and data['prev_open_interest'] > 0:
+            oi_change = (data['open_interest'] - data['prev_open_interest']) / data['prev_open_interest'] * 100
+        
+        # Get price and OI direction
+        price_direction = "📈" if price_change > 0 else "📉"
+        oi_direction = "📈" if oi_change > 0 else "📉"
 
-    # Check alert conditions
-    if abs(price_change) > 2 and volume_change > volume_threshold and abs(volatility_change) > 50 and abs(oi_change) > 50:
-        message = (
-            f"📢 {data['symbol']} ({data['timeframe']})\n"
-            f"💰 Price: {data['price']:.6f} {price_direction} ({price_change:.2f}%)\n"
-            f"📊 Volume: {data['volume']:.2f} ({volume_change:.2f}%)\n"
-            f"⚡ Volatility: {volatility_change:.2f}%\n"
-            f"📉 Open Interest: {oi_direction} {oi_change:.2f}%"
-        )
-        try:
-            await bot.send_message(chat_id=chat_id, text=message)
-            logger.info(f"✅ Alert sent for {data['symbol']} in timeframe {data['timeframe']}")
-        except Exception as e:
-            logger.error(f"❌ Error sending message: {e}")
+        # Check alert conditions
+        if abs(price_change) > 2 and volume_change > volume_threshold and abs(volatility_change) > 50 and abs(oi_change) > 5:
+            message = (
+                f"📢 {data['symbol']} ({data['timeframe']})\n"
+                f"💰 Price: {data['price']:.6f} {price_direction} ({price_change:.2f}%)\n"
+                f"📊 Volume: {data['volume']:.2f} ({volume_change:.2f}%)\n"
+                f"⚡ Volatility: {volatility_change:.2f}%\n"
+                f"📉 Open Interest: {oi_direction} {oi_change:.2f}%"
+            )
+            try:
+                await bot.send_message(chat_id=chat_id, text=message)
+                logger.info(f"✅ Alert sent for {data['symbol']} in timeframe {data['timeframe']}")
+            except Exception as e:
+                logger.error(f"❌ Error sending message: {e}")
+    except Exception as e:
+        logger.error(f"Error processing market data: {e}")
 
 async def on_startup():
-    await bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"✅ Webhook set to {WEBHOOK_URL}")
-    
-    # Check Binance connection
     try:
-        binance.fetch_ticker("BTC/USDT:USDT")
-        logger.info("✅ Binance connection test successful")
+        await bot.set_webhook(WEBHOOK_URL)
+        logger.info(f"✅ Webhook set to {WEBHOOK_URL}")
+        
+        # Check Binance connection
+        if binance:
+            binance.fetch_ticker("BTC/USDT:USDT")
+            logger.info("✅ Binance connection test successful")
     except Exception as e:
-        logger.error(f"❌ Binance connection test failed: {e}")
+        logger.error(f"❌ Error during startup: {e}")
 
 async def main():
-    await on_startup()    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info(f"✅ Web server started on port {PORT}")
-    
-    while True:
-        await asyncio.sleep(3600)
+    try:
+        await on_startup()    
+        
+        # Start the web server
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
+        await site.start()
+        
+        logger.info(f"✅ Web server started on port {PORT}")
+        
+        # Keep the application running
+        while True:
+            await asyncio.sleep(3600)
+    except Exception as e:
+        logger.error(f"❌ Error in main function: {e}")
 
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=PORT)
+    asyncio.run(main())
