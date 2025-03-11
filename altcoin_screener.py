@@ -83,11 +83,12 @@ def get_futures_symbols():
     try:
         if not binance:
             return []
-        # Filter markets to get active USDT futures pairs.
+        
+        # Get all active futures pairs regardless of the underlying quote asset.
         futures_symbols = [
-            market  # e.g., "BTC/USDT"
+            market  # Include every market key that is marked as active
             for market in binance.markets.keys()
-            if market.endswith("/USDT") and binance.markets[market]["active"]
+            if binance.markets[market].get("active", False)
         ]
         # Remove duplicates
         futures_symbols = list(set(futures_symbols))
