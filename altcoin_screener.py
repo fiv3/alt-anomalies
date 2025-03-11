@@ -64,7 +64,7 @@ async def home(request):
 
 app.router.add_get("/", home)
 
-dp.middleware.setup(ThrottlingMiddleware(limit=1))
+dp.message.middleware(ThrottlingMiddleware(limit=1))
 
 # === Initialize Binance API ===
 try:
@@ -84,15 +84,19 @@ def get_futures_symbols():
         if not binance:
             return []
             
+        # Filter markets to get active futures pairs with USDT.
+        # Removed additional conditions (contract and linear) to include more pairs.
         futures_symbols = [
             market.replace("/", "").split(":")[0]
             for market in binance.markets.keys()
-            if "USDT" in market and binance.markets[market].get("contract") and binance.markets[market].get("linear") and binance.markets[market]["active"]
+            if "USDT" in market and binance.markets[market]["active"]
         ]
-        logger.info(f"✅ Found {len(futures_symbols)} active Binance Futures pairs.")
+        # Remove duplicates
+        futures_symbols = list(set(futures_symbols))
+        logger.info(f"Active Binance Futures pairs: {futures_symbols}")
         return futures_symbols
     except Exception as e:
-        logger.error(f"❌ Binance API Error: {e}")
+        logger.error(f"Binance API Error: {e}")
         return []
 
 SYMBOLS = get_futures_symbols()
@@ -126,6 +130,15 @@ async def start_monitoring():
             logger.info("🔍 Market monitoring started")
 
 # === Command: /start - Register chat ID ===
+@dp.message(Command("symbols"))
+async def symbols_command(message: Message):
+    if SYMBOLS:
+        # Join the symbols list into a string separated by newlines
+        symbols_list = "\n".join(SYMBOLS)
+        await message.answer(f"Active Futures Pairs:\n{symbols_list}")
+    else:
+        await message.answer("No active futures pairs found.")
+
 @dp.message(Command("start"))
 async def start_command(message: Message):
     chat_id = message.chat.id
