@@ -84,8 +84,7 @@ def get_futures_symbols():
         if not binance:
             return []
             
-        # Filter markets to get active futures pairs with USDT.
-        # Removed additional conditions (contract and linear) to include more pairs.
+        # Filter markets to get active USDT futures pairs.
         futures_symbols = [
             market.replace("/", "").split(":")[0]
             for market in binance.markets.keys()
@@ -93,16 +92,16 @@ def get_futures_symbols():
         ]
         # Remove duplicates
         futures_symbols = list(set(futures_symbols))
-        logger.info(f"Active Binance Futures pairs: {futures_symbols}")
+        logger.info(f"✅ Found {len(futures_symbols)} active Binance Futures pairs: {futures_symbols}")
         return futures_symbols
     except Exception as e:
-        logger.error(f"Binance API Error: {e}")
+        logger.error(f"❌ Binance API Error: {e}")
         return []
 
 SYMBOLS = get_futures_symbols()
 if not SYMBOLS:
     logger.warning("⚠️ No active Binance Futures symbols found.")
-    SYMBOLS = ["BTCUSDT", "ETHUSDT"]  # Default symbols to avoid empty list
+    SYMBOLS = []
 
 # === Define timeframes and volume thresholds ===
 TIMEFRAMES = {
