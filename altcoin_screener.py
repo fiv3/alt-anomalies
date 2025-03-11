@@ -59,7 +59,7 @@ app = web.Application()
 webhook_requests = SimpleRequestHandler(dispatcher=dp, bot=bot)
 webhook_requests.register(app, path=WEBHOOK_PATH)
 
-async def home(request): 
+async def home(request):
     return web.Response(text="Altcoin Screener Bot is running!")
 
 app.router.add_get("/", home)
@@ -83,19 +83,18 @@ def get_futures_symbols():
     try:
         if not binance:
             return []
-            
         # Filter markets to get active USDT futures pairs.
         futures_symbols = [
-            market.replace("/", "").split(":")[0]
+            market  # e.g., "BTC/USDT"
             for market in binance.markets.keys()
-            if "USDT" in market and binance.markets[market]["active"]
+            if market.endswith("/USDT") and binance.markets[market]["active"]
         ]
         # Remove duplicates
         futures_symbols = list(set(futures_symbols))
-        logger.info(f"✅ Found {len(futures_symbols)} active Binance Futures pairs: {futures_symbols}")
+        logger.info(f"Found {len(futures_symbols)} active Binance Futures pairs: {futures_symbols}")
         return futures_symbols
     except Exception as e:
-        logger.error(f"❌ Binance API Error: {e}")
+        logger.error(f"Binance API Error: {e}")
         return []
 
 SYMBOLS = get_futures_symbols()
@@ -120,29 +119,28 @@ monitoring_started = False
 monitoring_task = None
 
 async def start_monitoring():
-    global monitoring_started
-    global monitoring_task
+    global monitoring_started, monitoring_task
     async with monitoring_lock:
         if not monitoring_started and chat_settings:
             monitoring_started = True
             monitoring_task = asyncio.create_task(monitor_market())
             logger.info("🔍 Market monitoring started")
 
-# === Command: /start - Register chat ID ===
+# === Command: /symbols - Show active futures pairs ===
 @dp.message(Command("symbols"))
 async def symbols_command(message: Message):
     if SYMBOLS:
-        # Join the symbols list into a string separated by newlines
         symbols_list = "\n".join(SYMBOLS)
         await message.answer(f"Active Futures Pairs:\n{symbols_list}")
     else:
         await message.answer("No active futures pairs found.")
 
+# === Command: /start - Register chat ID ===
 @dp.message(Command("start"))
 async def start_command(message: Message):
     chat_id = message.chat.id
     if chat_id not in chat_settings:
-        chat_settings[chat_id] = {"timeframe": "5m"}  
+        chat_settings[chat_id] = {"timeframe": "5m"}
     await message.answer("👋 Altcoin Screener Bot is running! Use /set_timeframe to configure.\n\nAvailable commands:\n/set_timeframe - Set monitoring timeframe\n/help - Show help\n/status - Show current status")
     await start_monitoring()
 
@@ -153,10 +151,9 @@ async def set_timeframe(message: Message):
     if len(args) < 2 or args[1] not in TIMEFRAMES:
         await message.answer("⚠️ Usage: /set_timeframe <5m|15m|1h|4h|1d|1w>")
         return
-    
+
     if chat_id not in chat_settings:
         chat_settings[chat_id] = {}
-        
     chat_settings[chat_id]["timeframe"] = args[1]
     await message.answer(f"✅ Timeframe set to {args[1]} for this chat.")
     await start_monitoring()
@@ -185,11 +182,11 @@ async def status_command(message: Message):
     if chat_id not in chat_settings:
         await message.answer("⚠️ Bot is not configured for this chat. Use /start first.")
         return
-    
+
     tf = chat_settings[chat_id].get("timeframe", "not set")
     active = "Yes" if monitoring_started else "No"
     symbols_count = len(SYMBOLS)
-    
+
     status_text = (
         f"📊 *Bot Status*\n\n"
         f"Active: {active}\n"
@@ -205,8 +202,9 @@ async def fetch_market_data(symbol, timeframe, semaphore):
         try:
             if not binance:
                 return None
-                
-            ohlcv = binance.fetch_ohlcv(f"{symbol}/USDT:USDT", timeframe, limit=2)
+
+            # Use the full market symbol directly, e.g., "BTC/USDT"
+            ohlcv = binance.fetch_ohlcv(symbol, timeframe, limit=2)
             if not ohlcv or len(ohlcv) < 2:
                 return None
 
@@ -215,11 +213,10 @@ async def fetch_market_data(symbol, timeframe, semaphore):
             previous = df.iloc[-2]
 
             try:
-                oi_data = binance.fetch_open_interest(f"{symbol}/USDT:USDT")
+                oi_data = binance.fetch_open_interest(symbol)
                 open_interest = float(oi_data.get("openInterest", 0)) if oi_data else 0
-                
-                # Get previous OI (simplified approach - in real scenario, store this in a database)
-                previous_oi = open_interest * 0.95  # Dummy value, just for demonstration
+                # Dummy previous open interest for demonstration purposes
+                previous_oi = open_interest * 0.95
             except Exception:
                 open_interest = 0
                 previous_oi = 0
@@ -251,7 +248,6 @@ async def monitor_market():
 
             for chat_id, settings in chat_settings.items():
                 timeframe = settings.get("timeframe", "5m")
-                
                 tasks = [fetch_market_data(symbol, timeframe, semaphore) for symbol in SYMBOLS]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 
@@ -268,7 +264,7 @@ async def monitor_market():
             await asyncio.sleep(30)
         except Exception as e:
             logger.error(f"Error in monitor_market: {e}")
-            await asyncio.sleep(60)  # Wait a bit longer if we hit an error
+            await asyncio.sleep(60)
 
 # === Process and send alerts ===
 async def process_market_data(data, chat_id):
@@ -280,21 +276,18 @@ async def process_market_data(data, chat_id):
         volume_change = 0
         if data['prev_volume'] > 0:
             volume_change = max((data['volume'] - data['prev_volume']) / data['prev_volume'] * 100, 0)
-        
+
         volatility_change = 0
         if data['prev_volatility'] > 0:
             volatility_change = (data['volatility'] - data['prev_volatility']) / max(data['prev_volatility'], 1) * 100
-        
-        # Calculate OI change
+
         oi_change = 0
         if 'prev_open_interest' in data and data['prev_open_interest'] > 0:
             oi_change = (data['open_interest'] - data['prev_open_interest']) / data['prev_open_interest'] * 100
-        
-        # Get price and OI direction
+
         price_direction = "📈" if price_change > 0 else "📉"
         oi_direction = "📈" if oi_change > 0 else "📉"
 
-        # Check alert conditions
         if abs(price_change) > 2 and volume_change > volume_threshold and abs(volatility_change) > 50 and abs(oi_change) > 5:
             message = (
                 f"📢 {data['symbol']} ({data['timeframe']})\n"
@@ -315,10 +308,8 @@ async def on_startup():
     try:
         await bot.set_webhook(WEBHOOK_URL)
         logger.info(f"✅ Webhook set to {WEBHOOK_URL}")
-        
-        # Check Binance connection
         if binance:
-            binance.fetch_ticker("BTC/USDT:USDT")
+            binance.fetch_ticker("BTC/USDT")
             logger.info("✅ Binance connection test successful")
     except Exception as e:
         logger.error(f"❌ Error during startup: {e}")
@@ -326,16 +317,11 @@ async def on_startup():
 async def main():
     try:
         await on_startup()    
-        
-        # Start the web server
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", PORT)
         await site.start()
-        
         logger.info(f"✅ Web server started on port {PORT}")
-        
-        # Keep the application running
         while True:
             await asyncio.sleep(3600)
     except Exception as e:
