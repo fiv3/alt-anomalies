@@ -22,14 +22,11 @@ class ThrottlingMiddleware(BaseMiddleware):
         user_id = event.from_user.id if event.from_user else None
         if not user_id:
             return await handler(event, data)
-
         if user_id in self.users:
             await asyncio.sleep(self.rate_limit)
-        
         self.users[user_id] = True
         await asyncio.sleep(self.rate_limit)
         del self.users[user_id]
-
         return await handler(event, data)
 
 # === Set up logging ===
@@ -61,41 +58,39 @@ webhook_requests.register(app, path=WEBHOOK_PATH)
 
 async def home(request):
     return web.Response(text="Altcoin Screener Bot is running!")
-
 app.router.add_get("/", home)
 
 dp.message.middleware(ThrottlingMiddleware(limit=1))
 
-# === Initialize Binance API ===
+# === Initialize Binance API for Futures ===
 try:
-    binance = ccxt.binance({
+    binance = ccxt.binanceusdm({
         'apiKey': BINANCE_API_KEY,
         'secret': BINANCE_SECRET_KEY,
-        'options': {'defaultType': 'future'}
+        'enableRateLimit': True,
     })
+    # Now load markets
     binance.load_markets()
+    logger.info(f"Loaded markets: {len(binance.markets)}")
 except Exception as e:
-    logger.error(f"❌ Failed to initialize Binance API: {e}")
+    logger.error(f"Failed to initialize Binance USDM API: {e}")
     binance = None
 
-# === Fetch active Binance Futures trading pairs ===
+# === Fetch active Binance Futures trading pairs (all markets) ===
 def get_futures_symbols():
     try:
         if not binance:
             return []
-        
-        # Get all active futures pairs regardless of the underlying quote asset.
+        # Filter active pairs (usually end with ":USDT")
         futures_symbols = [
-            market  # Include every market key that is marked as active
-            for market in binance.markets.keys()
-            if binance.markets[market].get("active", False)
+            market
+            for market, data in binance.markets.items()
+            if data.get("active") and data.get("type") == "swap" and ":USDT" in market
         ]
-        # Remove duplicates
-        futures_symbols = list(set(futures_symbols))
-        logger.info(f"Found {len(futures_symbols)} active Binance Futures pairs: {futures_symbols}")
+        logger.info(f"Found {len(futures_symbols)} active USDM Futures pairs: {futures_symbols}")
         return futures_symbols
     except Exception as e:
-        logger.error(f"Binance API Error: {e}")
+        logger.error(f"Error fetching futures symbols: {e}")
         return []
 
 SYMBOLS = get_futures_symbols()
@@ -152,7 +147,6 @@ async def set_timeframe(message: Message):
     if len(args) < 2 or args[1] not in TIMEFRAMES:
         await message.answer("⚠️ Usage: /set_timeframe <5m|15m|1h|4h|1d|1w>")
         return
-
     if chat_id not in chat_settings:
         chat_settings[chat_id] = {}
     chat_settings[chat_id]["timeframe"] = args[1]
@@ -183,11 +177,9 @@ async def status_command(message: Message):
     if chat_id not in chat_settings:
         await message.answer("⚠️ Bot is not configured for this chat. Use /start first.")
         return
-
     tf = chat_settings[chat_id].get("timeframe", "not set")
     active = "Yes" if monitoring_started else "No"
     symbols_count = len(SYMBOLS)
-
     status_text = (
         f"📊 *Bot Status*\n\n"
         f"Active: {active}\n"
@@ -203,25 +195,20 @@ async def fetch_market_data(symbol, timeframe, semaphore):
         try:
             if not binance:
                 return None
-
-            # Use the full market symbol directly, e.g., "BTC/USDT"
+            # Use the full market symbol directly, e.g., "BTC/USDT:USDT" or similar
             ohlcv = binance.fetch_ohlcv(symbol, timeframe, limit=2)
             if not ohlcv or len(ohlcv) < 2:
                 return None
-
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             latest = df.iloc[-1]
             previous = df.iloc[-2]
-
             try:
                 oi_data = binance.fetch_open_interest(symbol)
                 open_interest = float(oi_data.get("openInterest", 0)) if oi_data else 0
-                # Dummy previous open interest for demonstration purposes
-                previous_oi = open_interest * 0.95
+                previous_oi = open_interest * 0.95  # Dummy previous OI for demo
             except Exception:
                 open_interest = 0
                 previous_oi = 0
-
             return {
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -246,22 +233,18 @@ async def monitor_market():
             if not chat_settings:
                 await asyncio.sleep(30)
                 continue
-
             for chat_id, settings in chat_settings.items():
                 timeframe = settings.get("timeframe", "5m")
                 tasks = [fetch_market_data(symbol, timeframe, semaphore) for symbol in SYMBOLS]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                
                 valid_results = []
                 for result in results:
                     if isinstance(result, Exception):
                         logger.error(f"Error fetching data: {result}")
                     elif result is not None:
                         valid_results.append(result)
-                
                 for data in valid_results:
                     await process_market_data(data, chat_id)
-
             await asyncio.sleep(30)
         except Exception as e:
             logger.error(f"Error in monitor_market: {e}")
@@ -272,23 +255,18 @@ async def process_market_data(data, chat_id):
     try:
         timeframe = data['timeframe']
         volume_threshold = TIMEFRAMES[timeframe]['volume_threshold']
-
         price_change = (data['price'] - data['prev_price']) / data['prev_price'] * 100
         volume_change = 0
         if data['prev_volume'] > 0:
             volume_change = max((data['volume'] - data['prev_volume']) / data['prev_volume'] * 100, 0)
-
         volatility_change = 0
         if data['prev_volatility'] > 0:
             volatility_change = (data['volatility'] - data['prev_volatility']) / max(data['prev_volatility'], 1) * 100
-
         oi_change = 0
         if 'prev_open_interest' in data and data['prev_open_interest'] > 0:
             oi_change = (data['open_interest'] - data['prev_open_interest']) / data['prev_open_interest'] * 100
-
         price_direction = "📈" if price_change > 0 else "📉"
         oi_direction = "📈" if oi_change > 0 else "📉"
-
         if abs(price_change) > 2 and volume_change > volume_threshold and abs(volatility_change) > 50 and abs(oi_change) > 5:
             message = (
                 f"📢 {data['symbol']} ({data['timeframe']})\n"
