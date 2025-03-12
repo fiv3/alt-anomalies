@@ -6,12 +6,17 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
+    libffi-dev \
+    tzdata \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first to leverage Docker cache
+# Set timezone
+ENV TZ=UTC
+
+# Copy requirements first (Docker cache optimization)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
 COPY . .

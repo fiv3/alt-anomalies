@@ -26,14 +26,13 @@ class ThrottlingMiddleware(BaseMiddleware):
             await asyncio.sleep(self.rate_limit)
         self.users[user_id] = True
         await asyncio.sleep(self.rate_limit)
-        del self.users[user_id]
+        if user_id in self.users:
+            del self.users[user_id]
         return await handler(event, data)
 
-# === Set up logging ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Load environment variables ===
 load_dotenv()
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
@@ -42,16 +41,14 @@ SERVICE_URL = os.getenv("SERVICE_URL")
 PORT = int(os.getenv("PORT", 8080))
 
 if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN or not SERVICE_URL:
-    logger.warning("⚠️ Missing API keys, bot token, or service URL! Bot will run but may not function properly.")
+    logger.warning("⚠️ Missing API keys, bot token, or service URL!")
 
-# === Set up Telegram Webhook ===
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{SERVICE_URL}{WEBHOOK_PATH}"
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN, timeout=30)
 dp = Dispatcher(storage=MemoryStorage())
 
-# === Aiohttp Webhook Setup ===
 app = web.Application()
 webhook_requests = SimpleRequestHandler(dispatcher=dp, bot=bot)
 webhook_requests.register(app, path=WEBHOOK_PATH)
@@ -62,43 +59,36 @@ app.router.add_get("/", home)
 
 dp.message.middleware(ThrottlingMiddleware(limit=1))
 
-# === Initialize Binance API for Futures ===
 try:
     binance = ccxt.binanceusdm({
         'apiKey': BINANCE_API_KEY,
         'secret': BINANCE_SECRET_KEY,
         'enableRateLimit': True,
     })
-    # Now load markets
-    binance.load_markets()
-    logger.info(f"Loaded markets: {len(binance.markets)}")
+    binance.load_markets(reload=True)
+    logger.info(f"✅ Reloaded markets: {len(binance.markets)}")
 except Exception as e:
     logger.error(f"Failed to initialize Binance USDM API: {e}")
     binance = None
 
-# === Fetch active Binance Futures trading pairs (all markets) ===
 def get_futures_symbols():
+    if not binance:
+        return []
     try:
-        if not binance:
-            return []
-        # Filter active pairs (usually end with ":USDT")
-        futures_symbols = [
-            market
-            for market, data in binance.markets.items()
+        return [
+            market for market, data in binance.markets.items()
             if data.get("active") and data.get("type") == "swap" and ":USDT" in market
         ]
-        logger.info(f"Found {len(futures_symbols)} active USDM Futures pairs: {futures_symbols}")
-        return futures_symbols
     except Exception as e:
         logger.error(f"Error fetching futures symbols: {e}")
         return []
 
 SYMBOLS = get_futures_symbols()
-if not SYMBOLS:
-    logger.warning("⚠️ No active Binance Futures symbols found.")
-    SYMBOLS = []
 
-# === Define timeframes and volume thresholds ===
+if binance:
+    for market, data in binance.markets.items():
+        print(f"{market}: {data}")
+
 TIMEFRAMES = {
     '5m': {'minutes': 5, 'volume_threshold': 500},
     '15m': {'minutes': 15, 'volume_threshold': 500},
@@ -108,8 +98,7 @@ TIMEFRAMES = {
     '1w': {'minutes': 10080, 'volume_threshold': 25}
 }
 
-# === Store chat settings ===
-chat_settings = {}  # {chat_id: {"timeframe": "5m"}}
+chat_settings = {}
 monitoring_lock = asyncio.Lock()
 monitoring_started = False
 monitoring_task = None
@@ -131,14 +120,24 @@ async def symbols_command(message: Message):
     else:
         await message.answer("No active futures pairs found.")
 
-# === Command: /start - Register chat ID ===
+@dp.message(Command("refresh"))
+async def refresh_symbols(message: Message):
+    global SYMBOLS
+    SYMBOLS = get_futures_symbols()
+    await message.answer(f"🔄 Updated! Found {len(SYMBOLS)} pairs.")
+
 @dp.message(Command("start"))
 async def start_command(message: Message):
-    chat_id = message.chat.id
-    if chat_id not in chat_settings:
-        chat_settings[chat_id] = {"timeframe": "5m"}
-    await message.answer("👋 Altcoin Screener Bot is running! Use /set_timeframe to configure.\n\nAvailable commands:\n/set_timeframe - Set monitoring timeframe\n/help - Show help\n/status - Show current status")
+    chat_settings[message.chat.id] = {"timeframe": "5m"}
+    await message.answer("👋 Bot started. Use /set_timeframe to configure.")
     await start_monitoring()
+
+async def start():
+    await bot.set_webhook(WEBHOOK_URL)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
 
 @dp.message(Command("set_timeframe"))
 async def set_timeframe(message: Message):
@@ -288,23 +287,17 @@ async def on_startup():
         await bot.set_webhook(WEBHOOK_URL)
         logger.info(f"✅ Webhook set to {WEBHOOK_URL}")
         if binance:
+            for market, data in binance.markets.items():
+                print(f"{market}: {data}")
             binance.fetch_ticker("BTC/USDT")
             logger.info("✅ Binance connection test successful")
     except Exception as e:
         logger.error(f"❌ Error during startup: {e}")
 
-async def main():
-    try:
-        await on_startup()    
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", PORT)
-        await site.start()
-        logger.info(f"✅ Web server started on port {PORT}")
-        while True:
-            await asyncio.sleep(3600)
-    except Exception as e:
-        logger.error(f"❌ Error in main function: {e}")
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(start())
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(start())
+
