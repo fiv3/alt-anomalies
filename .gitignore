@@ -1,2 +1,13 @@
-.env
 .test
+.git
+.env
+.vscode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.DS_Store

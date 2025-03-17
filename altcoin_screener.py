@@ -1,36 +1,53 @@
-import os
-import ccxt
-import logging
-import asyncio
-import pandas as pd
-from aiogram import Bot, Dispatcher
+import os, ccxt, logging, asyncio, time, logging.handlers, signal, sys, pandas
+
+from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
-from dotenv import load_dotenv
-from aiohttp import web
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram import BaseMiddleware
+from aiohttp import web
+from dotenv import load_dotenv
+from functools import lru_cache
+from datetime import datetime, timedelta
+from prometheus_client import Counter, Histogram, start_http_server
+
+logging.basicConfig(
+    level=os.getenv('LOG_LEVEL', 'INFO'),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.handlers.RotatingFileHandler(
+            'bot.log',
+            maxBytes=10485760,  # 10MB
+            backupCount=5
+        )
+    ]
+)
 
 class ThrottlingMiddleware(BaseMiddleware):
     def __init__(self, limit=1):
         super().__init__()
         self.rate_limit = limit
         self.users = {}
+        self.lock = asyncio.Lock()  # Add lock for thread safety
 
     async def __call__(self, handler, event, data):
         user_id = event.from_user.id if event.from_user else None
         if not user_id:
             return await handler(event, data)
-        if user_id in self.users:
-            await asyncio.sleep(self.rate_limit)
-        self.users[user_id] = True
-        await asyncio.sleep(self.rate_limit)
-        if user_id in self.users:
-            del self.users[user_id]
-        return await handler(event, data)
+            
+        async with self.lock:
+            if user_id in self.users:
+                await asyncio.sleep(self.rate_limit)
+            self.users[user_id] = True
+            
+        try:
+            return await handler(event, data)
+        finally:
+            async with self.lock:
+                if user_id in self.users:
+                    del self.users[user_id]
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -70,6 +87,14 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Binance USDM API: {e}")
     binance = None
+
+API_REQUESTS = Counter('api_requests_total', 'Total API requests made')
+PROCESSING_TIME = Histogram('processing_time_seconds', 'Time spent processing market data')
+ERROR_COUNTER = Counter('error_total', 'Total number of errors')
+
+@lru_cache(maxsize=100)
+def get_cached_symbols():
+    return get_futures_symbols()
 
 def get_futures_symbols():
     if not binance:
@@ -133,11 +158,21 @@ async def start_command(message: Message):
     await start_monitoring()
 
 async def start():
+    # Start Prometheus metrics server
+    start_http_server(8000)
+    
+    # Setup health check endpoint
+    async def health_check(request):
+        return web.Response(text="healthy")
+    app.router.add_get("/health", health_check)
+    
     await bot.set_webhook(WEBHOOK_URL)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
+    
+    logger.info("Bot started successfully")
 
 @dp.message(Command("set_timeframe"))
 async def set_timeframe(message: Message):
@@ -191,63 +226,61 @@ async def status_command(message: Message):
 # === Fetch market data ===
 async def fetch_market_data(symbol, timeframe, semaphore):
     async with semaphore:
-        try:
-            if not binance:
-                return None
-            # Use the full market symbol directly, e.g., "BTC/USDT:USDT" or similar
-            ohlcv = binance.fetch_ohlcv(symbol, timeframe, limit=2)
-            if not ohlcv or len(ohlcv) < 2:
-                return None
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            latest = df.iloc[-1]
-            previous = df.iloc[-2]
+        for retry in range(3):  # Add retries
             try:
-                oi_data = binance.fetch_open_interest(symbol)
-                open_interest = float(oi_data.get("openInterest", 0)) if oi_data else 0
-                previous_oi = open_interest * 0.95  # Dummy previous OI for demo
-            except Exception:
-                open_interest = 0
-                previous_oi = 0
-            return {
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "price": float(latest['close']),
-                "prev_price": float(previous['close']),
-                "volume": float(latest['volume']),
-                "prev_volume": float(previous['volume']),
-                "volatility": (float(latest['high']) - float(latest['low'])) / float(latest['low']) * 100,
-                "prev_volatility": (float(previous['high']) - float(previous['low'])) / float(previous['low']) * 100,
-                "open_interest": open_interest,
-                "prev_open_interest": previous_oi
-            }
-        except Exception as e:
-            logger.error(f"⚠️ Binance API Error for {symbol}: {e}")
-            return None
+                if not binance:
+                    return None
+                    
+                async with asyncio.timeout(10):  # Add timeout
+                    ohlcv = binance.fetch_ohlcv(symbol, timeframe, limit=2)
+                    
+                if not ohlcv or len(ohlcv) < 2:
+                    return None
+                df = pandas.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                PROCESSING_TIME.observe(time.time() - start_time)
+                return df
+            except asyncio.TimeoutError:
+                if retry == 2:
+                    logger.error(f"Timeout fetching data for {symbol}")
+                    return None
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"⚠️ Binance API Error for {symbol}: {e}")
+                return None
 
 # === Monitor market ===
 async def monitor_market():
-    semaphore = asyncio.Semaphore(10)
     while True:
         try:
-            if not chat_settings:
-                await asyncio.sleep(30)
-                continue
+            start_time = time.time()
+            tasks = []
+            semaphore = asyncio.Semaphore(10)  # Limit concurrent API calls
+            
             for chat_id, settings in chat_settings.items():
                 timeframe = settings.get("timeframe", "5m")
-                tasks = [fetch_market_data(symbol, timeframe, semaphore) for symbol in SYMBOLS]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                valid_results = []
-                for result in results:
-                    if isinstance(result, Exception):
-                        logger.error(f"Error fetching data: {result}")
-                    elif result is not None:
-                        valid_results.append(result)
-                for data in valid_results:
-                    await process_market_data(data, chat_id)
-            await asyncio.sleep(30)
+                symbols = get_cached_symbols()  # Use cached symbols
+                
+                for symbol in symbols:
+                    task = asyncio.create_task(fetch_market_data(symbol, timeframe, semaphore))
+                    tasks.append(task)
+                    
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    ERROR_COUNTER.inc()
+                    logger.error(f"Error in market monitoring: {result}")
+                    
+            PROCESSING_TIME.observe(time.time() - start_time)
+            
+            # Dynamic sleep based on processing time
+            processing_time = time.time() - start_time
+            sleep_time = max(1, 60 - processing_time)  # Ensure at least 1 second sleep
+            await asyncio.sleep(sleep_time)
+            
         except Exception as e:
-            logger.error(f"Error in monitor_market: {e}")
-            await asyncio.sleep(60)
+            ERROR_COUNTER.inc()
+            logger.error(f"Critical error in market monitoring: {e}")
+            await asyncio.sleep(5)  # Wait before retrying
 
 # === Process and send alerts ===
 async def process_market_data(data, chat_id):
@@ -294,10 +327,20 @@ async def on_startup():
     except Exception as e:
         logger.error(f"❌ Error during startup: {e}")
 
+def handle_shutdown(signum, frame):
+    logger.info("Received shutdown signal")
+    if monitoring_task:
+        monitoring_task.cancel()
+    loop = asyncio.get_event_loop()
+    loop.stop()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
+
 if __name__ == "__main__":
     try:
         asyncio.run(start())
     except RuntimeError:
         loop = asyncio.get_event_loop()
         loop.run_until_complete(start())
-
