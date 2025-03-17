@@ -15,16 +15,15 @@ WORKDIR /app
 # Copy only necessary files
 COPY --from=builder /root/.local /root/.local
 COPY altcoin_screener.py .
-COPY .env .
 
 # Set PATH and environment variables
 ENV PATH=/root/.local/bin:$PATH \
     PORT=8080 \
     PYTHONUNBUFFERED=1 \
-    TZ=UTC
+    TZ=UTC \
+    SERVICE_URL=https://altcoin-screener-256702831943.run.app/
 
 # Cloud Run will provide the port as an env variable
 EXPOSE ${PORT}
 
-# Remove healthcheck as Cloud Run handles it
 CMD exec python altcoin_screener.py
