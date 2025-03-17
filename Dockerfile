@@ -21,7 +21,7 @@ ENV PATH=/root/.local/bin:$PATH \
     PORT=8080 \
     PYTHONUNBUFFERED=1 \
     TZ=UTC \
-    SERVICE_URL=https://altcoin-screener-256702831943.run.app/
+    SERVICE_URL=https://altcoin-screener-altcoin-screener.run.app/
 
 # Cloud Run will provide the port as an env variable
 EXPOSE ${PORT}

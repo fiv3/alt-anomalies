@@ -1,11 +1,11 @@
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/256702831943/altcoin-screener', '.']
+    args: ['build', '-t', 'gcr.io/altcoin-screener/altcoin-screener', '.']
   
   # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/256702831943/altcoin-screener']
+    args: ['push', 'gcr.io/altcoin-screener/altcoin-screener']
   
   # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -15,7 +15,7 @@ steps:
     - 'deploy'
     - 'altcoin-screener'
     - '--image'
-    - 'gcr.io/256702831943/altcoin-screener'
+    - 'gcr.io/altcoin-screener/altcoin-screener'
     - '--region'
     - 'asia-east1'
     - '--platform'
@@ -35,4 +35,4 @@ steps:
     - 'BINANCE_API_KEY=BINANCE_API_KEY:latest,BINANCE_SECRET_KEY=BINANCE_SECRET_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest'
 
 images:
-  - 'gcr.io/256702831943/altcoin-screener'
+  - 'gcr.io/altcoin-screener/altcoin-screener'
