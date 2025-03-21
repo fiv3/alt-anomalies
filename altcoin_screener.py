@@ -161,21 +161,29 @@ async def start_command(message: Message):
     await start_monitoring()
 
 async def start():
-    # Start Prometheus metrics server
-    start_http_server(8000)
-    
-    # Setup health check endpoint
+    # Setup health check endpoint first
     async def health_check(request):
-        return web.Response(text="healthy")
+        return web.Response(text="healthy", status=200)
+    
     app.router.add_get("/health", health_check)
     
-    await bot.set_webhook(WEBHOOK_URL)
+    # Start web server
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     
-    logger.info("Bot started successfully")
+    # Start Prometheus metrics server
+    start_http_server(8000)
+    
+    # Set webhook last
+    try:
+        await bot.set_webhook(WEBHOOK_URL)
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
+        # Continue anyway as this is not critical
+    
+    logger.info(f"Bot started on port {PORT}")
 
 @dp.message(Command("set_timeframe"))
 async def set_timeframe(message: Message):
@@ -344,6 +352,6 @@ signal.signal(signal.SIGINT, handle_shutdown)
 if __name__ == "__main__":
     try:
         asyncio.run(start())
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(start())
+    except Exception as e:
+        logger.error(f"Startup error: {e}")
+        sys.exit(1)
