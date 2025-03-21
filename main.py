@@ -1,69 +1,183 @@
 import functions_framework
 from requests import Session
 import os
-import json
-from datetime import datetime
-import asyncio
+import logging
 from aiogram import Bot, types
+from datetime import datetime, timedelta
 
-# Инициализация бота
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize bot
 bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN'))
 
-def get_cmc_data():
-    session = Session()
-    session.headers.update({
-        'X-CMC_PRO_API_KEY': os.getenv('CMC_API_KEY'),
-        'Accept': 'application/json'
-    })
-    
+# Timeframe settings with volume multipliers
+TIMEFRAMES = {
+    '5m': {'minutes': 5, 'volume_multiplier': 20},
+    '15m': {'minutes': 15, 'volume_multiplier': 20},
+    '1h': {'minutes': 60, 'volume_multiplier': 4},
+    '4h': {'minutes': 240, 'volume_multiplier': 4},
+    '1d': {'minutes': 1440, 'volume_multiplier': 1},
+    '1w': {'minutes': 10080, 'volume_multiplier': 1}
+}
+
+# Alert thresholds
+THRESHOLDS = {
+    'price_change': 2.0,    # 2% price change
+    'base_volume_change': 25.0,  # 25% base volume change
+    'open_interest_change': 50.0,  # 50% open interest change
+    'volatility_change': 50.0  # 50% volatility change
+}
+
+# Store user settings in memory
+chat_settings = {}
+
+async def get_market_data(symbol, timeframe):
+    """Fetch market data from CoinMarketCap"""
     try:
-        response = session.get(
-            'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest',
-            params={'limit': 100, 'convert': 'USDT'}
+        session = Session()
+        session.headers.update({
+            'X-CMC_PRO_API_KEY': os.getenv('CMC_API_KEY'),
+            'Accept': 'application/json'
+        })
+
+        # Get current data
+        current_response = session.get(
+            'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest',
+            params={'symbol': symbol, 'convert': 'USDT'}
         )
-        data = response.json()
         
-        if data['status']['error_code'] == 0:
-            return [{
-                'symbol': coin['symbol'],
-                'price': coin['quote']['USDT']['price'],
-                'volume_24h': coin['quote']['USDT']['volume_24h'],
-                'percent_change_24h': coin['quote']['USDT']['percent_change_24h']
-            } for coin in data['data']]
-        return None
+        if current_response.status_code != 200:
+            return None, None
+
+        current_data = current_response.json()
+        current_quote = current_data['data'][symbol]['quote']['USDT']
+        
+        # Calculate time for previous period
+        now = datetime.now()
+        tf_minutes = TIMEFRAMES[timeframe]['minutes']
+        previous_time = now - timedelta(minutes=tf_minutes)
+        
+        # Get historical data
+        historical_response = session.get(
+            'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/historical',
+            params={
+                'symbol': symbol,
+                'time_start': previous_time.isoformat(),
+                'convert': 'USDT'
+            }
+        )
+        
+        if historical_response.status_code != 200:
+            return None, None
+
+        historical_data = historical_response.json()
+        previous_quote = historical_data['data'][symbol]['quotes'][0]['quote']['USDT']
+
+        # Prepare data structures
+        current = {
+            'price': current_quote['price'],
+            'volume': current_quote['volume_24h'],
+            'open_interest': current_quote.get('open_interest', 0),
+            'volatility': (current_quote['high_24h'] - current_quote['low_24h']) / current_quote['low_24h'] * 100
+        }
+        
+        previous = {
+            'price': previous_quote['price'],
+            'volume': previous_quote['volume_24h'],
+            'open_interest': previous_quote.get('open_interest', 0),
+            'volatility': (previous_quote['high_24h'] - previous_quote['low_24h']) / previous_quote['low_24h'] * 100
+        }
+
+        return current, previous
+
     except Exception as e:
-        print(f"Error fetching CMC data: {e}")
+        logger.error(f"Error fetching market data: {e}")
+        return None, None
+
+async def check_thresholds(symbol, timeframe, current, previous):
+    """Check if market changes exceed thresholds"""
+    try:
+        # Calculate changes
+        price_change = ((current['price'] - previous['price']) / previous['price']) * 100
+        volume_change = ((current['volume'] - previous['volume']) / previous['volume']) * 100
+        oi_change = ((current['open_interest'] - previous['open_interest']) / previous['open_interest']) * 100
+        volatility_change = ((current['volatility'] - previous['volatility']) / previous['volatility']) * 100
+
+        # Adjust volume threshold based on timeframe
+        volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
+
+        # Check if all thresholds are exceeded
+        if (abs(price_change) > THRESHOLDS['price_change'] and 
+            abs(volume_change) > volume_threshold and 
+            abs(oi_change) > THRESHOLDS['open_interest_change'] and 
+            abs(volatility_change) > THRESHOLDS['volatility_change']):
+
+            return f"""
+🚨 Alert for {symbol} ({timeframe})
+💰 Price: ${current['price']:.4f} ({price_change:+.2f}%)
+📊 Volume: ${current['volume']:,.0f} ({volume_change:+.2f}%)
+📈 Open Interest: ${current['open_interest']:,.0f} ({oi_change:+.2f}%)
+⚡ Volatility: {current['volatility']:.2f}% ({volatility_change:+.2f}%)
+"""
+        return None
+
+    except Exception as e:
+        logger.error(f"Error checking thresholds: {e}")
         return None
 
 @functions_framework.http
 async def main(request):
-    """HTTP Cloud Function."""
+    """Cloud Function entry point"""
     try:
-        # Обработка вебхука от Telegram
         if request.method == 'POST':
             update = types.Update(**request.get_json())
             
             if update.message and update.message.text:
                 chat_id = update.message.chat.id
+                message_text = update.message.text.lower()
                 
-                if update.message.text == '/start':
-                    await bot.send_message(chat_id, "👋 Бот запущен! Используйте /price для получения цен.")
-                    return ('OK', 200)
-                
-                elif update.message.text == '/price':
-                    data = get_cmc_data()
-                    if data:
-                        message = "📊 Топ криптовалюты:\n\n"
-                        for coin in data[:10]:  # Топ 10
-                            message += f"{coin['symbol']}: ${coin['price']:.2f} ({coin['percent_change_24h']:.1f}%)\n"
-                        await bot.send_message(chat_id, message)
+                if message_text == '/start':
+                    help_text = """
+🤖 Market Scanner Bot
+
+Commands:
+/set_timeframe <tf> - Set monitoring timeframe
+Available timeframes: 5m, 15m, 1h, 4h, 1d, 1w
+
+Alert Triggers:
+- Price change > 2%
+- Volume change > 25-500% (based on timeframe)
+- Open Interest change > 50%
+- Volatility change > 50%
+"""
+                    await bot.send_message(chat_id, help_text)
+                    
+                elif message_text.startswith('/set_timeframe '):
+                    timeframe = message_text.split()[1]
+                    if timeframe in TIMEFRAMES:
+                        chat_settings[chat_id] = {'timeframe': timeframe}
+                        volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
+                        await bot.send_message(
+                            chat_id, 
+                            f"✅ Timeframe set to {timeframe}\nVolume threshold: {volume_threshold}%"
+                        )
                     else:
-                        await bot.send_message(chat_id, "❌ Ошибка получения данных")
-                    return ('OK', 200)
-        
-        # Проверка работоспособности
+                        await bot.send_message(chat_id, "❌ Invalid timeframe")
+                
+                elif message_text == '/status':
+                    if chat_id in chat_settings:
+                        tf = chat_settings[chat_id]['timeframe']
+                        volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[tf]['volume_multiplier']
+                        await bot.send_message(
+                            chat_id,
+                            f"Current timeframe: {tf}\nVolume threshold: {volume_threshold}%"
+                        )
+                    else:
+                        await bot.send_message(chat_id, "Not configured. Use /set_timeframe first")
+
         return ('OK', 200)
-    
     except Exception as e:
-        print(f"Error: {e}")
-        return ('Error', 500) 
+        logger.error(f"Error in main: {e}")
+        return ('Error', 500)
