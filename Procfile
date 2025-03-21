@@ -1,1 +1,0 @@
-web: python altcoin_screener.py 
