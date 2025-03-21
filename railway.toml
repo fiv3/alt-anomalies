@@ -1,0 +1,8 @@
+[build]
+builder = "nixpacks"
+buildCommand = "pip install -r requirements.txt"
+
+[deploy]
+startCommand = "python altcoin_screener.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 100 

@@ -81,6 +81,10 @@ try:
         'apiKey': BINANCE_API_KEY,
         'secret': BINANCE_SECRET_KEY,
         'enableRateLimit': True,
+        'options': {
+            'defaultType': 'future'
+        },
+        'timeout': 30000,
     })
     binance.load_markets(reload=True)
     logger.info(f"✅ Reloaded markets: {len(binance.markets)}")

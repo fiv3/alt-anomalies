@@ -17,7 +17,7 @@ steps:
     - '--image'
     - 'gcr.io/altcoin-screener/altcoin-screener'
     - '--region'
-    - 'asia-east1'
+    - 'us-west1'
     - '--platform'
     - 'managed'
     - '--allow-unauthenticated'
