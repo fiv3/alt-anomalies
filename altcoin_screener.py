@@ -54,14 +54,13 @@ load_dotenv()
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-SERVICE_URL = os.getenv("SERVICE_URL")
 PORT = int(os.getenv("PORT", 8080))
 
-if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN or not SERVICE_URL:
+if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN:
     logger.warning("⚠️ Missing API keys, bot token, or service URL!")
 
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{SERVICE_URL}{WEBHOOK_PATH}"
+WEBHOOK_URL = f"{WEBHOOK_PATH}"
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN, timeout=30)
 dp = Dispatcher(storage=MemoryStorage())
