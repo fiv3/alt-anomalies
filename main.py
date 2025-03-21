@@ -2,10 +2,9 @@ import functions_framework
 from requests import Session
 import os
 import logging
-import asyncio
 from aiogram import Bot, types
 from datetime import datetime, timedelta
-from functools import wraps
+import json
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -35,13 +34,7 @@ THRESHOLDS = {
 # Store user settings in memory
 chat_settings = {}
 
-def async_wrapper(f):
-    @wraps(f)
-    def wrapped(*args, **kwargs):
-        return asyncio.run(f(*args, **kwargs))
-    return wrapped
-
-async def get_market_data(symbol, timeframe):
+def get_market_data(symbol, timeframe):
     """Fetch market data from CoinMarketCap"""
     try:
         session = Session()
@@ -102,13 +95,12 @@ async def get_market_data(symbol, timeframe):
         return None, None
 
 @functions_framework.http
-@async_wrapper
-async def main(request):
+def main(request):
     """Cloud Function entry point"""
     try:
         if request.method == 'POST':
             try:
-                update = types.Update(**request.get_json())
+                update = types.Update.model_validate(request.get_json())
                 
                 if update.message and update.message.text:
                     chat_id = update.message.chat.id
@@ -128,30 +120,30 @@ Alert Triggers:
 - Open Interest change > 50%
 - Volatility change > 50%
 """
-                        await bot.send_message(chat_id, help_text)
+                        bot.send_message(chat_id, help_text)
                         
                     elif message_text.startswith('/set_timeframe '):
                         timeframe = message_text.split()[1]
                         if timeframe in TIMEFRAMES:
                             chat_settings[chat_id] = {'timeframe': timeframe}
                             volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
-                            await bot.send_message(
+                            bot.send_message(
                                 chat_id, 
                                 f"✅ Timeframe set to {timeframe}\nVolume threshold: {volume_threshold}%"
                             )
                         else:
-                            await bot.send_message(chat_id, "❌ Invalid timeframe")
+                            bot.send_message(chat_id, "❌ Invalid timeframe")
                     
                     elif message_text == '/status':
                         if chat_id in chat_settings:
                             tf = chat_settings[chat_id]['timeframe']
                             volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[tf]['volume_multiplier']
-                            await bot.send_message(
+                            bot.send_message(
                                 chat_id,
                                 f"Current timeframe: {tf}\nVolume threshold: {volume_threshold}%"
                             )
                         else:
-                            await bot.send_message(chat_id, "Not configured. Use /set_timeframe first")
+                            bot.send_message(chat_id, "Not configured. Use /set_timeframe first")
             
             except Exception as e:
                 logger.error(f"Error processing telegram update: {e}")
@@ -165,7 +157,7 @@ Alert Triggers:
                     continue
                     
                 for symbol in symbols:
-                    current, previous = await get_market_data(symbol, timeframe)
+                    current, previous = get_market_data(symbol, timeframe)
                     if current and previous:
                         # Calculate changes
                         price_change = ((current['price'] - previous['price']) / previous['price']) * 100
@@ -187,7 +179,7 @@ Alert Triggers:
 📈 Open Interest: ${current['open_interest']:,.0f} ({oi_change:+.2f}%)
 ⚡ Volatility: {current['volatility']:.2f}% ({volatility_change:+.2f}%)
 """
-                            await bot.send_message(chat_id, alert)
+                            bot.send_message(chat_id, alert)
                             
         return ('OK', 200)
     except Exception as e:
