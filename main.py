@@ -6,6 +6,7 @@ from aiogram import Bot, types
 from datetime import datetime, timedelta
 import asyncio
 import json
+from functools import wraps
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -13,6 +14,18 @@ logger = logging.getLogger(__name__)
 
 # Initialize bot with parse_mode
 bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN'))
+
+# Decorator for handling async functions in Flask
+def async_handler(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(f(*args, **kwargs))
+        finally:
+            loop.close()
+    return wrapper
 
 # Timeframe settings with volume multipliers
 TIMEFRAMES = {
@@ -125,6 +138,7 @@ Alert Triggers:
 - Volatility change > 50%
 """
                 await bot.send_message(chat_id, help_text)
+                return "OK"
                 
             elif message_text.startswith('/set_timeframe '):
                 timeframe = message_text.split()[1]
@@ -135,8 +149,10 @@ Alert Triggers:
                         chat_id, 
                         f"✅ Timeframe set to {timeframe}\nVolume threshold: {volume_threshold}%"
                     )
+                    return "OK"
                 else:
                     await bot.send_message(chat_id, "❌ Invalid timeframe")
+                    return "Invalid timeframe"
             
             elif message_text == '/status':
                 if chat_id in chat_settings:
@@ -146,11 +162,14 @@ Alert Triggers:
                         chat_id,
                         f"Current timeframe: {tf}\nVolume threshold: {volume_threshold}%"
                     )
+                    return "OK"
                 else:
                     await bot.send_message(chat_id, "Not configured. Use /set_timeframe first")
+                    return "Not configured"
     
     except Exception as e:
         logger.error(f"Error processing telegram update: {e}")
+        return str(e)
 
 async def check_market_data():
     """Check market data and send alerts"""
@@ -186,20 +205,16 @@ async def check_market_data():
                     await bot.send_message(chat_id, alert)
 
 @functions_framework.http
-def main(request):
+@async_handler
+async def main(request):
     """Cloud Function entry point"""
     try:
         if request.method == 'POST':
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(handle_telegram_update(request.get_json()))
-            loop.close()
+            result = await handle_telegram_update(request.get_json())
+            return (result, 200)
         elif request.method == 'GET':
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(check_market_data())
-            loop.close()
-        return ('OK', 200)
+            await check_market_data()
+            return ('OK', 200)
     except Exception as e:
         logger.error(f"Error in main: {e}")
         return ('Error', 500)
