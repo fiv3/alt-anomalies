@@ -141,9 +141,12 @@ Alert Triggers:
 """
                 await send_telegram_message(chat_id, help_text)
                 
-            elif message_text.startswith('/set_timeframe '):
-                timeframe = message_text.split()[1]
-                if timeframe in TIMEFRAMES:
+            elif message_text.startswith('/set_timeframe'):
+                # Извлекаем таймфрейм, убирая возможные пробелы
+                parts = message_text.replace('/set_timeframe', '').strip()
+                timeframe = parts if parts else None
+                
+                if timeframe and timeframe in TIMEFRAMES:
                     chat_settings[chat_id] = {'timeframe': timeframe}
                     volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
                     await send_telegram_message(
@@ -151,7 +154,11 @@ Alert Triggers:
                         f"✅ Timeframe set to {timeframe}\nVolume threshold: {volume_threshold}%"
                     )
                 else:
-                    await send_telegram_message(chat_id, "❌ Invalid timeframe")
+                    available_timeframes = ', '.join(TIMEFRAMES.keys())
+                    await send_telegram_message(
+                        chat_id, 
+                        f"❌ Invalid timeframe. Available options: {available_timeframes}"
+                    )
             
             elif message_text == '/status':
                 if chat_id in chat_settings:
@@ -166,6 +173,7 @@ Alert Triggers:
     
     except Exception as e:
         logger.error(f"Error processing telegram update: {e}")
+        logger.exception("Full traceback:")  # Добавляем полный traceback для отладки
 
 async def process_market_check():
     """Process market data check"""
