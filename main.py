@@ -6,12 +6,13 @@ from aiogram import Bot, types
 from datetime import datetime, timedelta
 import asyncio
 from flask import jsonify
+import aiohttp
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize bot
+# Initialize bot with persistent session
 bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN'))
 
 # Timeframe settings with volume multipliers
@@ -101,6 +102,20 @@ def get_market_data(symbol, timeframe):
         logger.error(f"Error in get_market_data: {e}")
         return None, None
 
+async def send_telegram_message(chat_id, text, retry_count=3):
+    """Helper function to send telegram messages with retries"""
+    for attempt in range(retry_count):
+        try:
+            async with bot:  # Properly initialize bot session
+                await asyncio.sleep(0.1)  # Small delay to prevent rate limiting
+                await bot.send_message(chat_id, text)
+                return True
+        except Exception as e:
+            if attempt == retry_count - 1:  # Last attempt
+                logger.error(f"Failed to send message after {retry_count} attempts: {e}")
+                return False
+            await asyncio.sleep(1)  # Wait before retry
+
 async def process_telegram_update(update_data):
     """Process Telegram update"""
     try:
@@ -124,30 +139,30 @@ Alert Triggers:
 - Open Interest change > 50%
 - Volatility change > 50%
 """
-                await bot.send_message(chat_id, help_text)
+                await send_telegram_message(chat_id, help_text)
                 
             elif message_text.startswith('/set_timeframe '):
                 timeframe = message_text.split()[1]
                 if timeframe in TIMEFRAMES:
                     chat_settings[chat_id] = {'timeframe': timeframe}
                     volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
-                    await bot.send_message(
+                    await send_telegram_message(
                         chat_id, 
                         f"✅ Timeframe set to {timeframe}\nVolume threshold: {volume_threshold}%"
                     )
                 else:
-                    await bot.send_message(chat_id, "❌ Invalid timeframe")
+                    await send_telegram_message(chat_id, "❌ Invalid timeframe")
             
             elif message_text == '/status':
                 if chat_id in chat_settings:
                     tf = chat_settings[chat_id]['timeframe']
                     volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[tf]['volume_multiplier']
-                    await bot.send_message(
+                    await send_telegram_message(
                         chat_id,
                         f"Current timeframe: {tf}\nVolume threshold: {volume_threshold}%"
                     )
                 else:
-                    await bot.send_message(chat_id, "Not configured. Use /set_timeframe first")
+                    await send_telegram_message(chat_id, "Not configured. Use /set_timeframe first")
     
     except Exception as e:
         logger.error(f"Error processing telegram update: {e}")
@@ -162,6 +177,7 @@ async def process_market_check():
                 continue
                 
             for symbol in symbols:
+                await asyncio.sleep(0.1)  # Add small delay between checks
                 current, previous = get_market_data(symbol, timeframe)
                 if current and previous:
                     # Calculate changes
@@ -184,7 +200,7 @@ async def process_market_check():
 📈 Open Interest: ${current['open_interest']:,.0f} ({oi_change:+.2f}%)
 ⚡ Volatility: {current['volatility']:.2f}% ({volatility_change:+.2f}%)
 """
-                        await bot.send_message(chat_id, alert)
+                        await send_telegram_message(chat_id, alert)
     
     except Exception as e:
         logger.error(f"Error in process_market_check: {e}")
@@ -192,28 +208,20 @@ async def process_market_check():
 @functions_framework.http
 def main(request):
     """HTTP Function entry point"""
+    async def async_wrapper():
+        try:
+            if request.method == "POST":
+                await process_telegram_update(request.get_json())
+            elif request.method == "GET":
+                await process_market_check()
+            return jsonify({"status": "ok"})
+        except Exception as e:
+            logger.error(f"Error in async_wrapper: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        if request.method == "POST":
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(process_telegram_update(request.get_json()))
-            finally:
-                loop.close()
-            return jsonify({"status": "ok"})
-        
-        elif request.method == "GET":
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(process_market_check())
-            finally:
-                loop.close()
-            return jsonify({"status": "ok"})
-        
-        else:
-            return jsonify({"error": "Method not allowed"}), 405
-            
-    except Exception as e:
-        logger.error(f"Error in main: {e}")
-        return jsonify({"error": str(e)}), 500
+        return loop.run_until_complete(async_wrapper())
+    finally:
+        loop.close()
