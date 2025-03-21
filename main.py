@@ -131,6 +131,7 @@ async def check_thresholds(symbol, timeframe, current, previous):
 async def main(request):
     """Cloud Function entry point"""
     try:
+        # Handle Telegram webhooks
         if request.method == 'POST':
             update = types.Update(**request.get_json())
             
@@ -176,6 +177,24 @@ Alert Triggers:
                         )
                     else:
                         await bot.send_message(chat_id, "Not configured. Use /set_timeframe first")
+
+        # Handle scheduler requests
+        elif request.method == 'GET':
+            # List of symbols to monitor
+            symbols = ['BTC', 'ETH', 'BNB', 'SOL', 'AVAX', 'MATIC']
+            
+            # Check each symbol for each chat's timeframe
+            for chat_id, settings in chat_settings.items():
+                timeframe = settings.get('timeframe')
+                if not timeframe:
+                    continue
+                    
+                for symbol in symbols:
+                    current, previous = await get_market_data(symbol, timeframe)
+                    if current and previous:
+                        alert = await check_thresholds(symbol, timeframe, current, previous)
+                        if alert:
+                            await bot.send_message(chat_id, alert)
 
         return ('OK', 200)
     except Exception as e:
