@@ -1,7 +1,7 @@
 functions-framework
 requests
 google-cloud-functions
-aiogram
+aiogram>=3.0.0
 python-dotenv
 ccxt
 pandas
