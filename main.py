@@ -2,8 +2,10 @@ import functions_framework
 from requests import Session
 import os
 import logging
+import asyncio
 from aiogram import Bot, types
 from datetime import datetime, timedelta
+from functools import wraps
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +35,12 @@ THRESHOLDS = {
 # Store user settings in memory
 chat_settings = {}
 
+def async_wrapper(f):
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        return asyncio.run(f(*args, **kwargs))
+    return wrapped
+
 async def get_market_data(symbol, timeframe):
     """Fetch market data from CoinMarketCap"""
     try:
@@ -49,6 +57,7 @@ async def get_market_data(symbol, timeframe):
         )
         
         if current_response.status_code != 200:
+            logger.error(f"Error fetching current data: {current_response.text}")
             return None, None
 
         current_data = current_response.json()
@@ -70,77 +79,43 @@ async def get_market_data(symbol, timeframe):
         )
         
         if historical_response.status_code != 200:
+            logger.error(f"Error fetching historical data: {historical_response.text}")
             return None, None
 
         historical_data = historical_response.json()
         previous_quote = historical_data['data'][symbol]['quotes'][0]['quote']['USDT']
 
-        # Prepare data structures
-        current = {
+        return {
             'price': current_quote['price'],
             'volume': current_quote['volume_24h'],
             'open_interest': current_quote.get('open_interest', 0),
             'volatility': (current_quote['high_24h'] - current_quote['low_24h']) / current_quote['low_24h'] * 100
-        }
-        
-        previous = {
+        }, {
             'price': previous_quote['price'],
             'volume': previous_quote['volume_24h'],
             'open_interest': previous_quote.get('open_interest', 0),
             'volatility': (previous_quote['high_24h'] - previous_quote['low_24h']) / previous_quote['low_24h'] * 100
         }
 
-        return current, previous
-
     except Exception as e:
-        logger.error(f"Error fetching market data: {e}")
+        logger.error(f"Error in get_market_data: {e}")
         return None, None
 
-async def check_thresholds(symbol, timeframe, current, previous):
-    """Check if market changes exceed thresholds"""
-    try:
-        # Calculate changes
-        price_change = ((current['price'] - previous['price']) / previous['price']) * 100
-        volume_change = ((current['volume'] - previous['volume']) / previous['volume']) * 100
-        oi_change = ((current['open_interest'] - previous['open_interest']) / previous['open_interest']) * 100
-        volatility_change = ((current['volatility'] - previous['volatility']) / previous['volatility']) * 100
-
-        # Adjust volume threshold based on timeframe
-        volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
-
-        # Check if all thresholds are exceeded
-        if (abs(price_change) > THRESHOLDS['price_change'] and 
-            abs(volume_change) > volume_threshold and 
-            abs(oi_change) > THRESHOLDS['open_interest_change'] and 
-            abs(volatility_change) > THRESHOLDS['volatility_change']):
-
-            return f"""
-🚨 Alert for {symbol} ({timeframe})
-💰 Price: ${current['price']:.4f} ({price_change:+.2f}%)
-📊 Volume: ${current['volume']:,.0f} ({volume_change:+.2f}%)
-📈 Open Interest: ${current['open_interest']:,.0f} ({oi_change:+.2f}%)
-⚡ Volatility: {current['volatility']:.2f}% ({volatility_change:+.2f}%)
-"""
-        return None
-
-    except Exception as e:
-        logger.error(f"Error checking thresholds: {e}")
-        return None
-
 @functions_framework.http
+@async_wrapper
 async def main(request):
     """Cloud Function entry point"""
     try:
-        # Handle Telegram webhooks
         if request.method == 'POST':
-            update = types.Update(**request.get_json())
-            
-            if update.message and update.message.text:
-                chat_id = update.message.chat.id
-                message_text = update.message.text.lower()
+            try:
+                update = types.Update(**request.get_json())
                 
-                if message_text == '/start':
-                    help_text = """
+                if update.message and update.message.text:
+                    chat_id = update.message.chat.id
+                    message_text = update.message.text.lower()
+                    
+                    if message_text == '/start':
+                        help_text = """
 🤖 Market Scanner Bot
 
 Commands:
@@ -153,37 +128,37 @@ Alert Triggers:
 - Open Interest change > 50%
 - Volatility change > 50%
 """
-                    await bot.send_message(chat_id, help_text)
+                        await bot.send_message(chat_id, help_text)
+                        
+                    elif message_text.startswith('/set_timeframe '):
+                        timeframe = message_text.split()[1]
+                        if timeframe in TIMEFRAMES:
+                            chat_settings[chat_id] = {'timeframe': timeframe}
+                            volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
+                            await bot.send_message(
+                                chat_id, 
+                                f"✅ Timeframe set to {timeframe}\nVolume threshold: {volume_threshold}%"
+                            )
+                        else:
+                            await bot.send_message(chat_id, "❌ Invalid timeframe")
                     
-                elif message_text.startswith('/set_timeframe '):
-                    timeframe = message_text.split()[1]
-                    if timeframe in TIMEFRAMES:
-                        chat_settings[chat_id] = {'timeframe': timeframe}
-                        volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
-                        await bot.send_message(
-                            chat_id, 
-                            f"✅ Timeframe set to {timeframe}\nVolume threshold: {volume_threshold}%"
-                        )
-                    else:
-                        await bot.send_message(chat_id, "❌ Invalid timeframe")
-                
-                elif message_text == '/status':
-                    if chat_id in chat_settings:
-                        tf = chat_settings[chat_id]['timeframe']
-                        volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[tf]['volume_multiplier']
-                        await bot.send_message(
-                            chat_id,
-                            f"Current timeframe: {tf}\nVolume threshold: {volume_threshold}%"
-                        )
-                    else:
-                        await bot.send_message(chat_id, "Not configured. Use /set_timeframe first")
-
-        # Handle scheduler requests
-        elif request.method == 'GET':
-            # List of symbols to monitor
-            symbols = ['BTC', 'ETH', 'BNB', 'SOL', 'AVAX', 'MATIC']
+                    elif message_text == '/status':
+                        if chat_id in chat_settings:
+                            tf = chat_settings[chat_id]['timeframe']
+                            volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[tf]['volume_multiplier']
+                            await bot.send_message(
+                                chat_id,
+                                f"Current timeframe: {tf}\nVolume threshold: {volume_threshold}%"
+                            )
+                        else:
+                            await bot.send_message(chat_id, "Not configured. Use /set_timeframe first")
             
-            # Check each symbol for each chat's timeframe
+            except Exception as e:
+                logger.error(f"Error processing telegram update: {e}")
+                
+        elif request.method == 'GET':
+            # Process scheduled check
+            symbols = ['BTC', 'ETH', 'BNB', 'SOL', 'AVAX', 'MATIC']
             for chat_id, settings in chat_settings.items():
                 timeframe = settings.get('timeframe')
                 if not timeframe:
@@ -192,10 +167,28 @@ Alert Triggers:
                 for symbol in symbols:
                     current, previous = await get_market_data(symbol, timeframe)
                     if current and previous:
-                        alert = await check_thresholds(symbol, timeframe, current, previous)
-                        if alert:
+                        # Calculate changes
+                        price_change = ((current['price'] - previous['price']) / previous['price']) * 100
+                        volume_change = ((current['volume'] - previous['volume']) / previous['volume']) * 100
+                        oi_change = ((current['open_interest'] - previous['open_interest']) / previous['open_interest']) * 100
+                        volatility_change = ((current['volatility'] - previous['volatility']) / previous['volatility']) * 100
+                        
+                        # Check thresholds
+                        volume_threshold = THRESHOLDS['base_volume_change'] * TIMEFRAMES[timeframe]['volume_multiplier']
+                        if (abs(price_change) > THRESHOLDS['price_change'] and 
+                            abs(volume_change) > volume_threshold and
+                            abs(oi_change) > THRESHOLDS['open_interest_change'] and
+                            abs(volatility_change) > THRESHOLDS['volatility_change']):
+                            
+                            alert = f"""
+🚨 Alert for {symbol} ({timeframe})
+💰 Price: ${current['price']:.2f} ({price_change:+.2f}%)
+📊 Volume: ${current['volume']:,.0f} ({volume_change:+.2f}%)
+📈 Open Interest: ${current['open_interest']:,.0f} ({oi_change:+.2f}%)
+⚡ Volatility: {current['volatility']:.2f}% ({volatility_change:+.2f}%)
+"""
                             await bot.send_message(chat_id, alert)
-
+                            
         return ('OK', 200)
     except Exception as e:
         logger.error(f"Error in main: {e}")
