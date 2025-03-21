@@ -38,58 +38,64 @@ chat_settings = {}
 def get_market_data(symbol, timeframe):
     """Fetch market data from CoinMarketCap"""
     try:
-        session = Session()
-        session.headers.update({
-            'X-CMC_PRO_API_KEY': os.getenv('CMC_API_KEY'),
-            'Accept': 'application/json'
-        })
+        with Session() as session:  # Using context manager for better resource cleanup
+            session.headers.update({
+                'X-CMC_PRO_API_KEY': os.getenv('CMC_API_KEY'),
+                'Accept': 'application/json'
+            })
 
-        # Get current data
-        current_response = session.get(
-            'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest',
-            params={'symbol': symbol, 'convert': 'USDT'}
-        )
-        
-        if current_response.status_code != 200:
-            logger.error(f"Error fetching current data: {current_response.text}")
-            return None, None
+            # Get current data
+            current_response = session.get(
+                'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest',
+                params={'symbol': symbol, 'convert': 'USDT'}
+            )
+            
+            if current_response.status_code != 200:
+                logger.error(f"Error fetching current data: {current_response.text}")
+                return None, None
 
-        current_data = current_response.json()
-        current_quote = current_data['data'][symbol]['quote']['USDT']
-        
-        # Calculate time for previous period
-        now = datetime.now()
-        tf_minutes = TIMEFRAMES[timeframe]['minutes']
-        previous_time = now - timedelta(minutes=tf_minutes)
-        
-        # Get historical data
-        historical_response = session.get(
-            'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/historical',
-            params={
-                'symbol': symbol,
-                'time_start': previous_time.isoformat(),
-                'convert': 'USDT'
+            current_data = current_response.json()
+            current_quote = current_data['data'][symbol]['quote']['USDT']
+            
+            # Calculate time for previous period
+            now = datetime.now()
+            tf_minutes = TIMEFRAMES[timeframe]['minutes']
+            previous_time = now - timedelta(minutes=tf_minutes)
+            
+            # Get historical data
+            historical_response = session.get(
+                'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/historical',
+                params={
+                    'symbol': symbol,
+                    'time_start': previous_time.isoformat(),
+                    'convert': 'USDT'
+                }
+            )
+            
+            if historical_response.status_code != 200:
+                logger.error(f"Error fetching historical data: {historical_response.text}")
+                return None, None
+
+            historical_data = historical_response.json()
+            previous_quote = historical_data['data'][symbol]['quotes'][0]['quote']['USDT']
+
+            # Clear responses to free memory
+            del current_response
+            del historical_response
+            del current_data
+            del historical_data
+
+            return {
+                'price': current_quote['price'],
+                'volume': current_quote['volume_24h'],
+                'open_interest': current_quote.get('open_interest', 0),
+                'volatility': (current_quote['high_24h'] - current_quote['low_24h']) / current_quote['low_24h'] * 100
+            }, {
+                'price': previous_quote['price'],
+                'volume': previous_quote['volume_24h'],
+                'open_interest': previous_quote.get('open_interest', 0),
+                'volatility': (previous_quote['high_24h'] - previous_quote['low_24h']) / previous_quote['low_24h'] * 100
             }
-        )
-        
-        if historical_response.status_code != 200:
-            logger.error(f"Error fetching historical data: {historical_response.text}")
-            return None, None
-
-        historical_data = historical_response.json()
-        previous_quote = historical_data['data'][symbol]['quotes'][0]['quote']['USDT']
-
-        return {
-            'price': current_quote['price'],
-            'volume': current_quote['volume_24h'],
-            'open_interest': current_quote.get('open_interest', 0),
-            'volatility': (current_quote['high_24h'] - current_quote['low_24h']) / current_quote['low_24h'] * 100
-        }, {
-            'price': previous_quote['price'],
-            'volume': previous_quote['volume_24h'],
-            'open_interest': previous_quote.get('open_interest', 0),
-            'volatility': (previous_quote['high_24h'] - previous_quote['low_24h']) / previous_quote['low_24h'] * 100
-        }
 
     except Exception as e:
         logger.error(f"Error in get_market_data: {e}")
