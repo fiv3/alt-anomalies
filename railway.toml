@@ -4,5 +4,7 @@ buildCommand = "pip install -r requirements.txt"
 
 [deploy]
 startCommand = "python altcoin_screener.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 100
 restartPolicyType = "on-failure"
-restartPolicyMaxRetries = 10 
+restartPolicyMaxRetries = 3 

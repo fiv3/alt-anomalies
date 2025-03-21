@@ -54,10 +54,15 @@ load_dotenv()
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+print(f"Token value: {TELEGRAM_BOT_TOKEN}")  # Добавьте эту строку для отладки
 PORT = int(os.getenv("PORT", 8080))
 
-if not BINANCE_API_KEY or not BINANCE_SECRET_KEY or not TELEGRAM_BOT_TOKEN:
-    logger.warning("⚠️ Missing API keys, bot token, or service URL!")
+if not TELEGRAM_BOT_TOKEN:
+    logger.error("❌ TELEGRAM_BOT_TOKEN is required!")
+    sys.exit(1)
+
+if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
+    logger.warning("⚠️ Binance API keys are missing - some features will be limited")
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_PATH}"
@@ -161,29 +166,51 @@ async def start_command(message: Message):
     await start_monitoring()
 
 async def start():
-    # Setup health check endpoint first
-    async def health_check(request):
-        return web.Response(text="healthy", status=200)
-    
-    app.router.add_get("/health", health_check)
-    
-    # Start web server
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    
-    # Start Prometheus metrics server
-    start_http_server(8000)
-    
-    # Set webhook last
     try:
-        await bot.set_webhook(WEBHOOK_URL)
+        # Setup health check endpoint first
+        async def health_check(request):
+            try:
+                # Простая проверка, что сервис работает
+                return web.Response(text="healthy", status=200)
+            except Exception as e:
+                logger.error(f"Health check error: {e}")
+                return web.Response(text="unhealthy", status=500)
+        
+        app.router.add_get("/health", health_check)
+        
+        # Start web server
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
+        await site.start()
+        
+        logger.info(f"Web server started on port {PORT}")
+        
+        # Инициализация бота и вебхука
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            await bot.set_webhook(WEBHOOK_URL)
+            logger.info(f"Webhook set to {WEBHOOK_URL}")
+        except Exception as e:
+            logger.error(f"Webhook setup error: {e}")
+            # Продолжаем работу, так как это не критично
+        
+        # Start Prometheus metrics server
+        try:
+            start_http_server(8000)
+            logger.info("Prometheus metrics server started")
+        except Exception as e:
+            logger.error(f"Prometheus server error: {e}")
+            # Продолжаем работу без метрик
+        
+        logger.info("Bot startup complete")
+        
+        # Держим приложение запущенным
+        await asyncio.Event().wait()
+        
     except Exception as e:
-        logger.error(f"Failed to set webhook: {e}")
-        # Continue anyway as this is not critical
-    
-    logger.info(f"Bot started on port {PORT}")
+        logger.error(f"Startup error: {e}")
+        raise
 
 @dp.message(Command("set_timeframe"))
 async def set_timeframe(message: Message):
@@ -353,5 +380,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(start())
     except Exception as e:
-        logger.error(f"Startup error: {e}")
+        logger.error(f"Fatal error: {e}")
         sys.exit(1)
