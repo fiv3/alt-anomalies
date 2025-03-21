@@ -1,9 +1,11 @@
-functions-framework
-requests
+functions-framework==3.*
+requests==2.*
 google-cloud-functions
-aiogram>=3.0.0
+aiogram==3.*
 python-dotenv
 ccxt
 pandas
 prometheus-client
 aiohttp
+python-dateutil==2.*
+flask==2.*
