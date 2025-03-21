@@ -1,4 +1,6 @@
 import os, ccxt, logging, asyncio, time, logging.handlers, signal, sys, pandas
+from requests import Session
+from requests.exceptions import RequestException
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.types import Message
@@ -65,7 +67,7 @@ if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
     logger.warning("⚠️ Binance API keys are missing - some features will be limited")
 
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{WEBHOOK_PATH}"
+WEBHOOK_URL = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}{WEBHOOK_PATH}"
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN, timeout=30)
 dp = Dispatcher(storage=MemoryStorage())
@@ -81,20 +83,56 @@ app.router.add_get("/", home)
 dp.message.middleware(ThrottlingMiddleware(limit=1))
 
 try:
-    binance = ccxt.binanceusdm({
-        'apiKey': BINANCE_API_KEY,
-        'secret': BINANCE_SECRET_KEY,
-        'enableRateLimit': True,
-        'options': {
-            'defaultType': 'future'
-        },
-        'timeout': 30000,
+    # Инициализация CoinMarketCap клиента
+    cmc_session = Session()
+    cmc_session.headers.update({
+        'X-CMC_PRO_API_KEY': os.getenv('CMC_API_KEY'),
+        'Accept': 'application/json'
     })
-    binance.load_markets(reload=True)
-    logger.info(f"✅ Reloaded markets: {len(binance.markets)}")
+    
+    def get_futures_symbols():
+        try:
+            # Получаем топ 100 криптовалют
+            response = cmc_session.get('https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest', 
+                params={'limit': 100, 'convert': 'USDT'})
+            data = response.json()
+            
+            if data['status']['error_code'] == 0:
+                return [f"{coin['symbol']}/USDT" for coin in data['data']]
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching CMC symbols: {e}")
+            return []
+
+    async def fetch_market_data(symbol, timeframe, semaphore):
+        async with semaphore:
+            try:
+                # Получаем актуальные данные по монете
+                symbol_clean = symbol.split('/')[0]
+                response = cmc_session.get(
+                    'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest',
+                    params={'symbol': symbol_clean, 'convert': 'USDT'}
+                )
+                data = response.json()
+                
+                if data['status']['error_code'] == 0:
+                    quote = data['data'][symbol_clean]['quote']['USDT']
+                    return {
+                        'symbol': symbol,
+                        'price': quote['price'],
+                        'volume_24h': quote['volume_24h'],
+                        'percent_change_1h': quote['percent_change_1h'],
+                        'percent_change_24h': quote['percent_change_24h'],
+                        'market_cap': quote['market_cap']
+                    }
+                return None
+            except Exception as e:
+                logger.error(f"Error fetching CMC data for {symbol}: {e}")
+                return None
+
+    logger.info("✅ CoinMarketCap API initialized")
 except Exception as e:
-    logger.error(f"Failed to initialize Binance USDM API: {e}")
-    binance = None
+    logger.error(f"Failed to initialize CoinMarketCap API: {e}")
 
 API_REQUESTS = Counter('api_requests_total', 'Total API requests made')
 PROCESSING_TIME = Histogram('processing_time_seconds', 'Time spent processing market data')
@@ -104,22 +142,10 @@ ERROR_COUNTER = Counter('error_total', 'Total number of errors')
 def get_cached_symbols():
     return get_futures_symbols()
 
-def get_futures_symbols():
-    if not binance:
-        return []
-    try:
-        return [
-            market for market, data in binance.markets.items()
-            if data.get("active") and data.get("type") == "swap" and ":USDT" in market
-        ]
-    except Exception as e:
-        logger.error(f"Error fetching futures symbols: {e}")
-        return []
-
 SYMBOLS = get_futures_symbols()
 
-if binance:
-    for market, data in binance.markets.items():
+if exchange:
+    for market, data in exchange.markets.items():
         print(f"{market}: {data}")
 
 TIMEFRAMES = {
@@ -188,9 +214,10 @@ async def start():
         
         # Инициализация бота и вебхука
         try:
+            webhook_url = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}{WEBHOOK_PATH}"
             await bot.delete_webhook(drop_pending_updates=True)
-            await bot.set_webhook(WEBHOOK_URL)
-            logger.info(f"Webhook set to {WEBHOOK_URL}")
+            await bot.set_webhook(webhook_url)
+            logger.info(f"Webhook set to {webhook_url}")
         except Exception as e:
             logger.error(f"Webhook setup error: {e}")
             # Продолжаем работу, так как это не критично
@@ -260,31 +287,6 @@ async def status_command(message: Message):
         f"Volume threshold: {TIMEFRAMES.get(tf, {}).get('volume_threshold', 'N/A')}%"
     )
     await message.answer(status_text, parse_mode="Markdown")
-
-# === Fetch market data ===
-async def fetch_market_data(symbol, timeframe, semaphore):
-    async with semaphore:
-        for retry in range(3):  # Add retries
-            try:
-                if not binance:
-                    return None
-                    
-                async with asyncio.timeout(10):  # Add timeout
-                    ohlcv = binance.fetch_ohlcv(symbol, timeframe, limit=2)
-                    
-                if not ohlcv or len(ohlcv) < 2:
-                    return None
-                df = pandas.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                PROCESSING_TIME.observe(time.time() - start_time)
-                return df
-            except asyncio.TimeoutError:
-                if retry == 2:
-                    logger.error(f"Timeout fetching data for {symbol}")
-                    return None
-                await asyncio.sleep(1)
-            except Exception as e:
-                logger.error(f"⚠️ Binance API Error for {symbol}: {e}")
-                return None
 
 # === Monitor market ===
 async def monitor_market():
@@ -357,10 +359,10 @@ async def on_startup():
     try:
         await bot.set_webhook(WEBHOOK_URL)
         logger.info(f"✅ Webhook set to {WEBHOOK_URL}")
-        if binance:
-            for market, data in binance.markets.items():
+        if exchange:
+            for market, data in exchange.markets.items():
                 print(f"{market}: {data}")
-            binance.fetch_ticker("BTC/USDT")
+            exchange.fetch_ticker("BTC/USDT")
             logger.info("✅ Binance connection test successful")
     except Exception as e:
         logger.error(f"❌ Error during startup: {e}")
